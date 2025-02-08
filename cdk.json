@@ -17,8 +17,8 @@
         ]
     },
     "context": {
-        "modelRegion": "us-east-1",
-        "modelId": "anthropic.claude-3-sonnet-20240229-v1:0",
+        "modelRegion": "us-west-2",
+        "modelId": "anthropic.claude-3-5-sonnet-20241022-v2:0",
         "summarizers": {
             "AwsSolutionsArchitectEnglish": {
                 "outputLanguage": "English.",
@@ -26,7 +26,7 @@
             },
             "AwsSolutionsArchitectJapanese": {
                 "outputLanguage": "Japanese. Each sentence must be output in polite and formal desu/masu style",
-                "persona": "solutions architect in AWS"
+                "persona": "skilled solutions architect in AWS"
             }
         },
         "notifiers": {
@@ -35,8 +35,22 @@
                 "summarizerName": "AwsSolutionsArchitectJapanese",
                 "webhookUrlParameterName": "/WhatsNew/URL",
                 "rssUrl": {
-                    "What’s new": "https://aws.amazon.com/about-aws/whats-new/recent/feed/"
-                }
+                    "What’s new": "https://aws.amazon.com/about-aws/whats-new/recent/feed/",
+                    "AWS blog": "https://aws.amazon.com/blogs/aws/feed/",
+                    "AWS Architecture Blog": "https://aws.amazon.com/blogs/architecture/feed/",
+                    "AWS DevOps Blog": "https://aws.amazon.com/jp/blogs/devops/feed/",
+                    "AWS Machine Learning Blog": "https://aws.amazon.com/blogs/machine-learning/feed/",
+                    "AWS Security Blog": "https://aws.amazon.com/blogs/security/feed/",
+                    "AWS Developer Tools Blog": "https://aws.amazon.com/blogs/developer/feed/",
+                    "AWS Big Data Blog": "https://aws.amazon.com/blogs/big-data/feed/"
+                },
+                "schedule": {
+                    "minute": "*",
+                    "hour": "*/2",
+                    "day": "*",
+                    "month": "*",
+                    "year": "*"
+                    }
             }
         },
         "@aws-cdk/aws-apigateway:usagePlanKeyOrderInsensitiveId": true,
