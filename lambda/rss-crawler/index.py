@@ -51,12 +51,16 @@ def write_to_table(link, title, category, pubtime, notifier_name):
         pubtime (str): The publication date of the blog post
     """
     try:
+        # TTLの有効期限を計算（例：30日後）
+        ttl = int((datetime.datetime.now() + datetime.timedelta(days=30)).timestamp())
+        
         item = {
             "url": link,
             "notifier_name": notifier_name,
             "title": title,
             "category": category,
             "pubtime": pubtime,
+            "ttl": ttl 
         }
         print(item)
         table.put_item(Item=item)

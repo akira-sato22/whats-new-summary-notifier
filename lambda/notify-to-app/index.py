@@ -145,9 +145,11 @@ def summarize_blog(
 <input>{blog_body}</input>
 <persona> {persona} </persona>
 <instruction>Describe a new update in <input></input> tags in bullet points to describe "What is described", "Who is this update good for" in a way that a new engineer can follow. 
-description shall be output in <thinking></thinking> tags and each thinking sentence must start with the bullet point "- " . 
-Make final summary as per <summaryRule></summaryRule> tags. Try to shorten output for easy reading. 
-You are not allowed to utilize any information except in the input. output format shall be in accordance with <outputFormat></outputFormat> tags.</instruction>
+Description shall be output in <thinking></thinking> tags and each thinking sentence must start with the bullet point "- " . 
+Make final summary as per <summaryRule></summaryRule> tags. 
+Try to shorten output for easy reading. 
+You are not allowed to utilize any information except in the input. 
+Output format shall be in accordance with <outputFormat></outputFormat> tags.</instruction>
 <outputLanguage> {language} </outputLanguage>
 <summaryRule>The final summary must consist of at least three sentences, including specific use cases in which it is useful.
 Output format is defined in <outputFormat></outputFormat> tags.</summaryRule>
@@ -287,19 +289,25 @@ def get_new_entries(blog_entries):
 
     res_list = []
     for entry in blog_entries:
-        print(entry)
-        if entry["eventName"] == "INSERT":
-            new_data = {
-                "rss_category": entry["dynamodb"]["NewImage"]["category"]["S"],
-                "rss_time": entry["dynamodb"]["NewImage"]["pubtime"]["S"],
-                "rss_title": entry["dynamodb"]["NewImage"]["title"]["S"],
-                "rss_link": entry["dynamodb"]["NewImage"]["url"]["S"],
-                "rss_notifier_name": entry["dynamodb"]["NewImage"]["notifier_name"]["S"],
-            }
-            print(new_data)
-            res_list.append(new_data)
-        else:  # Do not notify for REMOVE or UPDATE events
-            print("skip REMOVE or UPDATE event")
+        print("Event Details:")
+        print(f"EventName: {entry.get('eventName')}")
+        print(f"DynamoDB Image: {json.dumps(entry.get('dynamodb', {}), indent=2)}")
+        
+        # INSERT または MODIFY イベントを処理
+        if entry["eventName"] in ["INSERT", "MODIFY"]:
+            # OldImageが存在しない場合は新規データとして扱う
+            if "OldImage" not in entry["dynamodb"]:
+                new_data = {
+                    "rss_category": entry["dynamodb"]["NewImage"]["category"]["S"],
+                    "rss_time": entry["dynamodb"]["NewImage"]["pubtime"]["S"],
+                    "rss_title": entry["dynamodb"]["NewImage"]["title"]["S"],
+                    "rss_link": entry["dynamodb"]["NewImage"]["url"]["S"],
+                    "rss_notifier_name": entry["dynamodb"]["NewImage"]["notifier_name"]["S"],
+                }
+                print(f"New data extracted: {json.dumps(new_data, indent=2)}")
+                res_list.append(new_data)
+        else:
+            print(f"スキップされたイベント: {entry['eventName']}")
     return res_list
 
 

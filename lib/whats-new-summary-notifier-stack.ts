@@ -63,10 +63,12 @@ export class WhatsNewSummaryNotifierStack extends Stack {
 
     // DynamoDB to store RSS data
     const rssHistoryTable = new Table(this, 'WhatsNewRSSHistory', {
+      tableName: 'AWSUpdatesRSSHistory',
       partitionKey: { name: 'url', type: AttributeType.STRING },
       sortKey: { name: 'notifier_name', type: AttributeType.STRING },
       billingMode: BillingMode.PAY_PER_REQUEST,
-      stream: StreamViewType.NEW_IMAGE,
+      stream: StreamViewType.NEW_AND_OLD_IMAGES,
+      timeToLiveAttribute: 'ttl',
     });
 
     // Lambda Function to post new entries written to DynamoDB to Slack or Microsoft Teams

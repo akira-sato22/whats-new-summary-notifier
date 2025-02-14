@@ -45,12 +45,12 @@
                     "AWS Big Data Blog": "https://aws.amazon.com/blogs/big-data/feed/"
                 },
                 "schedule": {
-                    "minute": "*",
-                    "hour": "*/2",
+                    "minute": "*/2",
+                    "hour": "*",
                     "day": "*",
                     "month": "*",
                     "year": "*"
-                    }
+                }
             }
         },
         "@aws-cdk/aws-apigateway:usagePlanKeyOrderInsensitiveId": true,
