@@ -46,7 +46,7 @@ export class WhatsNewSummaryNotifierStack extends cdk.Stack {
         ],
       })
     );
-    cdk.Tags.of(this).add(Tags.keys.purpose, Tags.values.purpose);
+    // cdk.Tags.of(notifyNewEntryRole).add(Tags.keys.purpose, Tags.values.purpose);
 
     // Role for Lambda function to fetch RSS and write to DynamoDB
     const newsCrawlerRole = new Role(this, 'NewsCrawlerRole', {
@@ -63,7 +63,7 @@ export class WhatsNewSummaryNotifierStack extends cdk.Stack {
         ],
       })
     );
-    cdk.Tags.of(newsCrawlerRole).add(Tags.keys.purpose, Tags.values.purpose);
+    // cdk.Tags.of(newsCrawlerRole).add(Tags.keys.purpose, Tags.values.purpose);
 
     // DynamoDB to store RSS data
     const rssHistoryTable = new Table(this, 'WhatsNewRSSHistory', {
@@ -74,7 +74,8 @@ export class WhatsNewSummaryNotifierStack extends cdk.Stack {
       stream: StreamViewType.NEW_AND_OLD_IMAGES,
       timeToLiveAttribute: 'ttl',
     });
-    cdk.Tags.of(rssHistoryTable).add(Tags.keys.purpose, Tags.values.purpose);
+    // cdk.Tags.of(rssHistoryTable).add(Tags.keys.purpose, Tags.values.purpose);
+
     // Lambda Function to post new entries written to DynamoDB to Slack or Microsoft Teams
     const notifyNewEntry = new PythonFunction(this, 'NotifyNewEntry', {
       functionName: 'WhatsNewSummary-Notifier',
@@ -99,7 +100,7 @@ export class WhatsNewSummaryNotifierStack extends cdk.Stack {
         batchSize: 1,
       })
     );
-    cdk.Tags.of(notifyNewEntry).add(Tags.keys.purpose, Tags.values.purpose);
+    // cdk.Tags.of(notifyNewEntry).add(Tags.keys.purpose, Tags.values.purpose);
 
     // Allow writing to DynamoDB
     rssHistoryTable.grantWriteData(newsCrawlerRole);
@@ -119,7 +120,8 @@ export class WhatsNewSummaryNotifierStack extends cdk.Stack {
         NOTIFIERS: JSON.stringify(notifiers),
       },
     });
-    cdk.Tags.of(newsCrawler).add(Tags.keys.purpose, Tags.values.purpose);
+    // cdk.Tags.of(newsCrawler).add(Tags.keys.purpose, Tags.values.purpose);
+
     for (const notifierName in notifiers) {
       const notifier = notifiers[notifierName];
       // const cron is a cronOption defined in a notifier. if it is not defined, set default schedule (every hour)

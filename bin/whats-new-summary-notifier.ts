@@ -2,6 +2,7 @@
 import 'source-map-support/register';
 import * as cdk from 'aws-cdk-lib';
 import { WhatsNewSummaryNotifierStack } from '../lib/whats-new-summary-notifier-stack';
+import { Tags } from '../lib/tags';
 
 const app = new cdk.App();
 new WhatsNewSummaryNotifierStack(app, 'WhatsNewSummaryNotifierStack', {
@@ -20,3 +21,5 @@ new WhatsNewSummaryNotifierStack(app, 'WhatsNewSummaryNotifierStack', {
   // env: { account: '123456789012', region: 'us-east-1' },
   /* For more information, see https://docs.aws.amazon.com/cdk/latest/guide/environments.html */
 });
+
+cdk.Tags.of(app).add(Tags.keys.purpose, Tags.values.purpose);
