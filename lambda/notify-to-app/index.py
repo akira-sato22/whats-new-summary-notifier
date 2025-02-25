@@ -289,25 +289,23 @@ def get_new_entries(blog_entries):
 
     res_list = []
     for entry in blog_entries:
-        print("Event Details:")
-        print(f"EventName: {entry.get('eventName')}")
-        print(f"DynamoDB Image: {json.dumps(entry.get('dynamodb', {}), indent=2)}")
-        
         # INSERT または MODIFY イベントを処理
         if entry["eventName"] in ["INSERT", "MODIFY"]:
-            # OldImageが存在しない場合は新規データとして扱う
-            if "OldImage" not in entry["dynamodb"]:
-                new_data = {
-                    "rss_category": entry["dynamodb"]["NewImage"]["category"]["S"],
-                    "rss_time": entry["dynamodb"]["NewImage"]["pubtime"]["S"],
-                    "rss_title": entry["dynamodb"]["NewImage"]["title"]["S"],
-                    "rss_link": entry["dynamodb"]["NewImage"]["url"]["S"],
-                    "rss_notifier_name": entry["dynamodb"]["NewImage"]["notifier_name"]["S"],
-                }
-                print(f"New data extracted: {json.dumps(new_data, indent=2)}")
-                res_list.append(new_data)
-        else:
-            print(f"スキップされたイベント: {entry['eventName']}")
+            new_data = {
+                "rss_category": entry["dynamodb"]["NewImage"]["category"]["S"],
+                "rss_time": entry["dynamodb"]["NewImage"]["pubtime"]["S"],
+                "rss_title": entry["dynamodb"]["NewImage"]["title"]["S"],
+                "rss_link": entry["dynamodb"]["NewImage"]["url"]["S"],
+                "rss_notifier_name": entry["dynamodb"]["NewImage"]["notifier_name"]["S"],
+            }
+            # MODIFYの場合、重要なフィールドに変更があった場合のみ通知
+            if entry["eventName"] == "MODIFY":
+                old_image = entry["dynamodb"].get("OldImage", {})
+                if (old_image.get("title", {}).get("S") == new_data["rss_title"] and
+                    old_image.get("url", {}).get("S") == new_data["rss_link"]):
+                    continue
+            print(f"New data extracted: {json.dumps(new_data, indent=2)}")
+            res_list.append(new_data)
     return res_list
 
 
