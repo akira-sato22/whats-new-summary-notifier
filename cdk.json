@@ -17,8 +17,8 @@
         ]
     },
     "context": {
-        "modelRegion": "us-west-2",
-        "modelId": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+        "modelRegion": "us-east-1",
+        "modelId": "us.anthropic.claude-3-7-sonnet-20250219-v1:0",
         "summarizers": {
             "AwsSolutionsArchitectEnglish": {
                 "outputLanguage": "English.",
@@ -35,7 +35,7 @@
                 "summarizerName": "AwsSolutionsArchitectJapanese",
                 "webhookUrlParameterName": "/WhatsNew/URL",
                 "rssUrl": {
-                    "What’s new": "https://aws.amazon.com/about-aws/whats-new/recent/feed/",
+                    "Whats new": "https://aws.amazon.com/about-aws/whats-new/recent/feed/",
                     "AWS blog": "https://aws.amazon.com/blogs/aws/feed/",
                     "AWS Architecture Blog": "https://aws.amazon.com/blogs/architecture/feed/",
                     "AWS DevOps Blog": "https://aws.amazon.com/jp/blogs/devops/feed/",
