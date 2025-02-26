@@ -250,7 +250,7 @@ def push_notification(item_list):
         destination = notifier["destination"]
         ssm_response = ssm.get_parameter(Name=webhook_url_parameter_name, WithDecryption=True)
         app_webhook_url = ssm_response["Parameter"]["Value"]
-        blog_genre = item["rss_notifier_name"]
+        # blog_genre = list(notifier["rssUrl"].keys())[0]
         item_url = item["rss_link"]
 
         # Get the blog context
@@ -263,6 +263,7 @@ def push_notification(item_list):
         # Add the summary text to notified message
         item["summary"] = summary
         item["detail"] = detail
+        # item["blog_genre"] = blog_genre
         if destination == "teams":
             item["detail"] = item["detail"].replace("。\n", "。\r")
             msg = create_teams_message(item)
