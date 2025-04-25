@@ -136,89 +136,96 @@ def summarize_blog(
         str: The summarized text
     """
 
-    boto3_bedrock = get_bedrock_client(
-        assumed_role=os.environ.get("BEDROCK_ASSUME_ROLE", None),
-        region=MODEL_REGION,
-    )
+    # boto3_bedrock = get_bedrock_client(
+    #     assumed_role=os.environ.get("BEDROCK_ASSUME_ROLE", None),
+    #     region=MODEL_REGION,
+    # )
+
+    boto3_bedrock = boto3.client("bedrock-runtime", region_name=MODEL_REGION)
+
     beginning_word = "<output>"
+
+    persona_data = f"""
+    <persona> {persona} </persona>
+    """
+    system = [{ "text" : persona_data}]
+
     prompt_data = f"""
-<input>{blog_body}</input>
-<persona> {persona} </persona>
-<instruction>Describe a new update in <input></input> tags in bullet points to describe "What is described", "Who is this update good for" in a way that a new engineer can follow. 
-Description shall be output in <thinking></thinking> tags and each thinking sentence must start with the bullet point "- " . 
-Make final summary as per <summaryRule></summaryRule> tags. 
-Try to shorten output for easy reading. 
-You are not allowed to utilize any information except in the input. 
-Output format shall be in accordance with <outputFormat></outputFormat> tags.</instruction>
-<outputLanguage> {language} </outputLanguage>
-<summaryRule>The final summary must consist of at least three sentences, including specific use cases in which it is useful.
-Output format is defined in <outputFormat></outputFormat> tags.</summaryRule>
-<outputFormat><thinking>(bullet points of the input)</thinking><summary>(final summary)</summary></outputFormat>
-Follow the instruction.
-"""
+    <input>{blog_body}</input>
+    <instruction>Describe a new update in <input></input> tags in bullet points to describe "What is described", "Who is this update good for" in a way that a new engineer can follow. 
+    Description shall be output in <thinking></thinking> tags and each thinking sentence must start with the bullet point "- " . 
+    Make final summary as per <summaryRule></summaryRule> tags. 
+    Try to shorten output for easy reading. 
+    You are not allowed to utilize any information except in the input. 
+    Output format shall be in accordance with <outputFormat></outputFormat> tags.</instruction>
+    <outputLanguage> {language} </outputLanguage>
+    <summaryRule>The final summary must consist of at least three sentences, including specific use cases in which it is useful.
+    Output format is defined in <outputFormat></outputFormat> tags.</summaryRule>
+    <outputFormat><thinking>(bullet points of the input)</thinking><summary>(final summary)</summary></outputFormat>
+    Follow the instruction.
+    """
 
-# <input>{blog_body}</input>
-# <persona> {persona} </persona>
-# <instruction>Describe a new update in <input></input> tags in bullet points to describe "What is described", "Who is this update good for" in a way that a new engineer can follow. 
-# description shall be output in <thinking></thinking> tags and each thinking sentence must start with the bullet point "- " and end with "\n". 
-# Make final summary as per <summaryRule></summaryRule> tags. Try to shorten output for easy reading. 
-# You are not allowed to utilize any information except in the input. output format shall be in accordance with <outputFormat></outputFormat> tags.</instruction>
-# <outputLanguage> {language} </outputLanguage>
-# <summaryRule>The final summary must consists of 3 sentences. Output format is defined in <outputFormat></outputFormat> tags.</summaryRule>
-# <outputFormat><thinking>(bullet points of the input)</thinking><summary>(final summary)</summary></outputFormat>
-# Follow the instruction.
-# """
-
-# <input>{blog_body}</input>
-# <persona>You are a professional {persona}. </persona>
-# <instruction>Describe a new update in <input></input> tags in bullet points to describe "What is the new feature", "Who is this update good for". description shall be output in <thinking></thinking> tags and each thinking sentence must start with the bullet point "- " and end with "\n". Make final summary as per <summaryRule></summaryRule> tags. Try to shorten output for easy reading. You are not allowed to utilize any information except in the input. output format shall be in accordance with <outputFormat></outputFormat> tags.</instruction>
-# <outputLanguage>In {language}.</outputLanguage>
-# <summaryRule>The final summary must consists of 1 or 2 sentences. Output format is defined in <outputFormat></outputFormat> tags.</summaryRule>
-# <outputFormat><thinking>(bullet points of the input)</thinking><summary>(final summary)</summary></outputFormat>
-# Follow the instruction.
-# """
-
-
-    max_tokens = 4096
-
-    user_message = {
-        "role": "user",
-        "content": [
-            {
-                "type": "text",
-                "text": prompt_data,
-            }
-        ],
-    }
-
-    assistant_message = {
-        "role": "assistant",
-        "content": [{"type": "text", "text": f"{beginning_word}"}],
-    }
-
-    messages = [user_message, assistant_message]
-
-    body = json.dumps(
+    messages = [
         {
-            "anthropic_version": "bedrock-2023-05-31",
-            "max_tokens": max_tokens,
-            "messages": messages,
-            "temperature": 0.5,
-            "top_p": 1,
-            "top_k": 250,
+            "role": "user", 
+            "content": [{"text": prompt_data}]
         }
-    )
+    ]
 
-    accept = "application/json"
-    contentType = "application/json"
+    inf_params = {
+        "maxTokens": 4096,
+        "topP": 0.1,
+        "temperature": 0.5
+    }
+
+    additionalModelRequestFields = {
+        "inferenceConfig": {
+            "topK": 20
+        }
+    }
+
+    # user_message = {
+    #     "role": "user",
+    #     "content": [
+    #         {
+    #             "type": "text",
+    #             "text": prompt_data,
+    #         }
+    #     ],
+    # }
+
+    # assistant_message = {
+    #     "role": "assistant",
+    #     "content": [{"type": "text", "text": f"{beginning_word}"}],
+    # }
+
+    # messages = [user_message, assistant_message]
+
+    # body = json.dumps(
+    #     {
+    #         "anthropic_version": "bedrock-2023-05-31",
+    #         "max_tokens": max_tokens,
+    #         "messages": messages,
+    #         "temperature": 0.5,
+    #         "top_p": 1,
+    #         "top_k": 250,
+    #     }
+    # )
+
+    # accept = "application/json"
+    # contentType = "application/json"
     outputText = "\n"
 
     try:
-        response = boto3_bedrock.invoke_model(
-            body=body, modelId=MODEL_ID, accept=accept, contentType=contentType
+        response = boto3_bedrock.converse(
+            modelId=MODEL_ID,
+            messages=messages,
+            system=system,
+            inferenceConfig=inf_params,
+            additionalModelRequestFields=additionalModelRequestFields
         )
-        response_body = json.loads(response.get("body").read().decode())
-        outputText = beginning_word + response_body.get("content")[0]["text"]
+        # response_body = json.loads(response.get("body").read().decode())
+        outputText = beginning_word + response['output']['message']['content'][0]['text']
         print(outputText)
         # extract contant inside <summary> tag
         summary = re.findall(r"<summary>([\s\S]*?)</summary>", outputText)[0]

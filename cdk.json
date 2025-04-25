@@ -18,7 +18,7 @@
     },
     "context": {
         "modelRegion": "us-east-1",
-        "modelId": "us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        "modelId": "us.amazon.nova-pro-v1:0",
         "summarizers": {
             "AwsSolutionsArchitectEnglish": {
                 "outputLanguage": "English.",
