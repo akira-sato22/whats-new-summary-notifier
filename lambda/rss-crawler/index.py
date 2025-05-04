@@ -50,6 +50,19 @@ def write_to_table(link, title, category, pubtime, notifier_name):
         category (str): The category of the blog post
         pubtime (str): The publication date of the blog post
     """
+    # 既存のエントリーを確認
+    response = table.get_item(
+        Key={
+            "url": link,
+            "notifier_name": notifier_name
+        }
+    )
+    
+    # 既に存在する場合はスキップ
+    if "Item" in response:
+        print(f"既存のエントリーをスキップします: {title}")
+        return
+        
     try:
         # TTLの有効期限を計算（例：30日後）
         ttl = int((datetime.datetime.now() + datetime.timedelta(days=30)).timestamp())
@@ -65,12 +78,8 @@ def write_to_table(link, title, category, pubtime, notifier_name):
         print(item)
         table.put_item(Item=item)
     except Exception as e:
-        # Intentional error handling for duplicates to continue
-        if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
-            print("Duplicate item put: " + title)
-        else:
-            # Continue for other errors
-            print(e.message)
+        # エラー処理
+        print(f"エラーが発生しました: {str(e)}")
 
 
 def add_blog(rss_name, entries, notifier_name):

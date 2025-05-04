@@ -19,8 +19,11 @@ MODEL_ID = os.environ["MODEL_ID"]
 MODEL_REGION = os.environ["MODEL_REGION"]
 NOTIFIERS = json.loads(os.environ["NOTIFIERS"])
 SUMMARIZERS = json.loads(os.environ["SUMMARIZERS"])
+DDB_TABLE_NAME = os.environ.get("DDB_TABLE_NAME", "AWSUpdatesRSSHistory")
 
 ssm = boto3.client("ssm")
+dynamo = boto3.resource("dynamodb")
+table = dynamo.Table(DDB_TABLE_NAME)
 
 
 def get_blog_content(url):
@@ -136,11 +139,6 @@ def summarize_blog(
         str: The summarized text
     """
 
-    # boto3_bedrock = get_bedrock_client(
-    #     assumed_role=os.environ.get("BEDROCK_ASSUME_ROLE", None),
-    #     region=MODEL_REGION,
-    # )
-
     boto3_bedrock = boto3.client("bedrock-runtime", region_name=MODEL_REGION)
 
     beginning_word = "<output>"
@@ -184,36 +182,6 @@ def summarize_blog(
         }
     }
 
-    # user_message = {
-    #     "role": "user",
-    #     "content": [
-    #         {
-    #             "type": "text",
-    #             "text": prompt_data,
-    #         }
-    #     ],
-    # }
-
-    # assistant_message = {
-    #     "role": "assistant",
-    #     "content": [{"type": "text", "text": f"{beginning_word}"}],
-    # }
-
-    # messages = [user_message, assistant_message]
-
-    # body = json.dumps(
-    #     {
-    #         "anthropic_version": "bedrock-2023-05-31",
-    #         "max_tokens": max_tokens,
-    #         "messages": messages,
-    #         "temperature": 0.5,
-    #         "top_p": 1,
-    #         "top_k": 250,
-    #     }
-    # )
-
-    # accept = "application/json"
-    # contentType = "application/json"
     outputText = "\n"
 
     try:
@@ -270,6 +238,27 @@ def push_notification(item_list):
         # Add the summary text to notified message
         item["summary"] = summary
         item["detail"] = detail
+        
+        # Update DynamoDB with the summary and detail
+        try:
+            update_expression = "SET summary = :summary, detail = :detail"
+            expression_values = {
+                ":summary": summary,
+                ":detail": detail
+            }
+            
+            table.update_item(
+                Key={
+                    "url": item["rss_link"],
+                    "notifier_name": item["rss_notifier_name"]
+                },
+                UpdateExpression=update_expression,
+                ExpressionAttributeValues=expression_values
+            )
+            print(f"Updated DynamoDB with summary and detail for {item['rss_title']}")
+        except Exception as e:
+            print(f"Error updating DynamoDB: {str(e)}")
+        
         # item["blog_genre"] = blog_genre
         if destination == "teams":
             item["detail"] = item["detail"].replace("。\n", "。\r")

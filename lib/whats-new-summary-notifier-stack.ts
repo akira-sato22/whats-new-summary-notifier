@@ -4,11 +4,12 @@ import { Table, AttributeType, BillingMode, StreamViewType } from 'aws-cdk-lib/a
 import { Rule, Schedule, RuleTargetInput, CronOptions } from 'aws-cdk-lib/aws-events';
 import { LambdaFunction } from 'aws-cdk-lib/aws-events-targets';
 import { Role, Policy, ServicePrincipal, PolicyStatement, Effect } from 'aws-cdk-lib/aws-iam';
-import { Runtime, StartingPosition } from 'aws-cdk-lib/aws-lambda';
+import { Runtime, StartingPosition, Code, Function } from 'aws-cdk-lib/aws-lambda';
 import { DynamoEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
 import { PythonFunction } from '@aws-cdk/aws-lambda-python-alpha';
 import { RetentionDays } from 'aws-cdk-lib/aws-logs';
 import { StringParameter } from 'aws-cdk-lib/aws-ssm';
+import { BlockPublicAccess, Bucket } from 'aws-cdk-lib/aws-s3';
 import * as path from 'path';
 
 import { Tags } from './tags';
@@ -60,10 +61,53 @@ export class WhatsNewSummaryNotifierStack extends cdk.Stack {
             effect: Effect.ALLOW,
             resources: [`arn:aws:logs:${region}:${accountId}:log-group:*`],
           }),
+          // DynamoDBへのアクセス権限を追加
+          new PolicyStatement({
+            actions: [
+              'dynamodb:PutItem',
+              'dynamodb:GetItem',
+              'dynamodb:UpdateItem',
+              'dynamodb:DeleteItem',
+              'dynamodb:BatchGetItem',
+              'dynamodb:BatchWriteItem',
+              'dynamodb:Query',
+              'dynamodb:Scan',
+            ],
+            effect: Effect.ALLOW,
+            resources: [`arn:aws:dynamodb:${region}:${accountId}:table/AWSUpdatesRSSHistory`],
+          }),
         ],
       })
     );
     // cdk.Tags.of(newsCrawlerRole).add(Tags.keys.purpose, Tags.values.purpose);
+
+    // S3バケットを作成（週間サマリーPDFの保存用）
+    const summaryBucket = new Bucket(this, 'WeeklySummaryBucket', {
+      bucketName: `aws-whats-new-weekly-summary-${accountId}-${region}`,
+      blockPublicAccess: BlockPublicAccess.BLOCK_ALL,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+      autoDeleteObjects: true,
+    });
+    // cdk.Tags.of(summaryBucket).add(Tags.keys.purpose, Tags.values.purpose);
+
+    // 週間サマリー作成Lambda用のロール
+    const weeklySummaryRole = new Role(this, 'WeeklySummaryRole', {
+      assumedBy: new ServicePrincipal('lambda.amazonaws.com'),
+    });
+    weeklySummaryRole.attachInlinePolicy(
+      new Policy(this, 'AllowWeeklySummaryLogging', {
+        statements: [
+          new PolicyStatement({
+            actions: ['logs:CreateLogGroup', 'logs:CreateLogStream', 'logs:PutLogEvents'],
+            effect: Effect.ALLOW,
+            resources: [`arn:aws:logs:${region}:${accountId}:log-group:*`],
+          }),
+        ],
+      })
+    );
+
+    // S3へのアクセス権限を追加
+    summaryBucket.grantWrite(weeklySummaryRole);
 
     // DynamoDB to store RSS data
     const rssHistoryTable = new Table(this, 'WhatsNewRSSHistory', {
@@ -75,6 +119,9 @@ export class WhatsNewSummaryNotifierStack extends cdk.Stack {
       timeToLiveAttribute: 'ttl',
     });
     // cdk.Tags.of(rssHistoryTable).add(Tags.keys.purpose, Tags.values.purpose);
+
+    // DynamoDBの読み取り権限を週間サマリー作成Lambda関数に付与
+    rssHistoryTable.grantReadData(weeklySummaryRole);
 
     // Lambda Function to post new entries written to DynamoDB to Slack or Microsoft Teams
     const notifyNewEntry = new PythonFunction(this, 'NotifyNewEntry', {
@@ -92,6 +139,7 @@ export class WhatsNewSummaryNotifierStack extends cdk.Stack {
         MODEL_REGION: modelRegion,
         NOTIFIERS: JSON.stringify(notifiers),
         SUMMARIZERS: JSON.stringify(summarizers),
+        DDB_TABLE_NAME: rssHistoryTable.tableName,
       },
     });
     notifyNewEntry.addEventSource(
@@ -104,6 +152,10 @@ export class WhatsNewSummaryNotifierStack extends cdk.Stack {
 
     // Allow writing to DynamoDB
     rssHistoryTable.grantWriteData(newsCrawlerRole);
+    // Allow reading from DynamoDB
+    rssHistoryTable.grantReadData(newsCrawlerRole);
+    // Allow the notify-to-app Lambda to update DynamoDB items
+    rssHistoryTable.grantWriteData(notifyNewEntryRole);
 
     // Lambda Function to fetch RSS and write to DynamoDB
     const newsCrawler = new PythonFunction(this, `newsCrawler`, {
@@ -121,6 +173,38 @@ export class WhatsNewSummaryNotifierStack extends cdk.Stack {
       },
     });
     // cdk.Tags.of(newsCrawler).add(Tags.keys.purpose, Tags.values.purpose);
+
+    // 週間サマリー作成Lambda関数
+    const weeklySummaryCreator = new Function(this, 'WeeklySummaryCreator', {
+      functionName: 'WhatsNewSummary-WeeklyCreator',
+      runtime: Runtime.PYTHON_3_11,
+      code: Code.fromAsset(path.join(__dirname, '../lambda/create-weekly-summary/function.zip')),
+      handler: 'index.handler',
+      timeout: cdk.Duration.seconds(300),
+      logRetention: RetentionDays.TWO_WEEKS,
+      role: weeklySummaryRole,
+      environment: {
+        DDB_TABLE_NAME: rssHistoryTable.tableName,
+        S3_BUCKET_NAME: summaryBucket.bucketName,
+      },
+    });
+    // cdk.Tags.of(weeklySummaryCreator).add(Tags.keys.purpose, Tags.values.purpose);
+
+    // 週間サマリー作成のスケジュールルールを設定（毎週月曜日の午前9時）
+    const weeklySummaryRule = new Rule(this, 'WeeklySummaryRule', {
+      schedule: Schedule.cron({
+        minute: '0',
+        hour: '9',
+        weekDay: '1',
+      }),
+      enabled: true,
+    });
+
+    weeklySummaryRule.addTarget(
+      new LambdaFunction(weeklySummaryCreator, {
+        retryAttempts: 2,
+      })
+    );
 
     for (const notifierName in notifiers) {
       const notifier = notifiers[notifierName];
