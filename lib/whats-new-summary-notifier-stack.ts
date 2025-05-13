@@ -121,6 +121,14 @@ export class WhatsNewSummaryNotifierStack extends cdk.Stack {
             effect: Effect.ALLOW,
             resources: [`arn:aws:logs:${region}:${accountId}:log-group:*`],
           }),
+          new PolicyStatement({
+            actions: ['ssm:GetParameter'],
+            effect: Effect.ALLOW,
+            resources: [
+              `arn:aws:ssm:${region}:${accountId}:parameter/WhatsNew/SLACK_BOT_TOKEN`,
+              `arn:aws:ssm:${region}:${accountId}:parameter/WhatsNew/SLACK_CHANNEL_ID`,
+            ],
+          }),
         ],
       })
     );
@@ -205,9 +213,20 @@ export class WhatsNewSummaryNotifierStack extends cdk.Stack {
       environment: {
         DDB_TABLE_NAME: rssHistoryTable.tableName,
         S3_BUCKET_NAME: summaryBucket.bucketName,
+        SLACK_BOT_TOKEN_PARAMETER: '/WhatsNew/SLACK_BOT_TOKEN',
+        SLACK_CHANNEL_ID: '/WhatsNew/SLACK_CHANNEL_ID',
       },
     });
     // cdk.Tags.of(markdownGenerator).add(Tags.keys.purpose, Tags.values.purpose);
+
+    // Slackトークンへのアクセス権限を追加
+    StringParameter.fromSecureStringParameterAttributes(this, 'SlackBotTokenForMarkdownGenerator', {
+      parameterName: '/WhatsNew/SLACK_BOT_TOKEN',
+    }).grantRead(markdownGeneratorRole);
+    // SlackチャンネルIDへのアクセス権限を追加
+    StringParameter.fromSecureStringParameterAttributes(this, 'SlackChannelIdForMarkdownGenerator', {
+      parameterName: '/WhatsNew/SLACK_CHANNEL_ID',
+    }).grantRead(markdownGeneratorRole);
 
     // Markdown生成のスケジュールルールを設定（毎日午前8時）
     const markdownGeneratorRule = new Rule(this, 'MarkdownGeneratorRule', {
