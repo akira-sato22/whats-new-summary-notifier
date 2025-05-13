@@ -109,6 +109,25 @@ export class WhatsNewSummaryNotifierStack extends cdk.Stack {
     // S3へのアクセス権限を追加
     summaryBucket.grantWrite(weeklySummaryRole);
 
+    // Markdown生成Lambda用のロール
+    const markdownGeneratorRole = new Role(this, 'MarkdownGeneratorRole', {
+      assumedBy: new ServicePrincipal('lambda.amazonaws.com'),
+    });
+    markdownGeneratorRole.attachInlinePolicy(
+      new Policy(this, 'AllowMarkdownGeneratorLogging', {
+        statements: [
+          new PolicyStatement({
+            actions: ['logs:CreateLogGroup', 'logs:CreateLogStream', 'logs:PutLogEvents'],
+            effect: Effect.ALLOW,
+            resources: [`arn:aws:logs:${region}:${accountId}:log-group:*`],
+          }),
+        ],
+      })
+    );
+
+    // S3へのアクセス権限を追加
+    summaryBucket.grantWrite(markdownGeneratorRole);
+
     // DynamoDB to store RSS data
     const rssHistoryTable = new Table(this, 'WhatsNewRSSHistory', {
       tableName: 'AWSUpdatesRSSHistory',
@@ -120,8 +139,8 @@ export class WhatsNewSummaryNotifierStack extends cdk.Stack {
     });
     // cdk.Tags.of(rssHistoryTable).add(Tags.keys.purpose, Tags.values.purpose);
 
-    // DynamoDBの読み取り権限を週間サマリー作成Lambda関数に付与
-    rssHistoryTable.grantReadData(weeklySummaryRole);
+    // DynamoDBの読み取り権限をMarkdown生成Lambda関数に付与
+    rssHistoryTable.grantReadData(markdownGeneratorRole);
 
     // Lambda Function to post new entries written to DynamoDB to Slack or Microsoft Teams
     const notifyNewEntry = new PythonFunction(this, 'NotifyNewEntry', {
@@ -173,35 +192,36 @@ export class WhatsNewSummaryNotifierStack extends cdk.Stack {
       },
     });
     // cdk.Tags.of(newsCrawler).add(Tags.keys.purpose, Tags.values.purpose);
-
-    // 週間サマリー作成Lambda関数
-    const weeklySummaryCreator = new Function(this, 'WeeklySummaryCreator', {
-      functionName: 'WhatsNewSummary-WeeklyCreator',
+    // Markdown生成Lambda関数
+    const markdownGenerator = new PythonFunction(this, 'MarkdownGenerator', {
+      functionName: 'WhatsNewSummary-MarkdownGenerator',
       runtime: Runtime.PYTHON_3_11,
-      code: Code.fromAsset(path.join(__dirname, '../lambda/create-weekly-summary/function.zip')),
-      handler: 'index.handler',
-      timeout: cdk.Duration.seconds(300),
+      entry: path.join(__dirname, '../lambda/markdown-generator'),
+      handler: 'handler',
+      index: 'index.py',
+      timeout: cdk.Duration.seconds(180),
       logRetention: RetentionDays.TWO_WEEKS,
-      role: weeklySummaryRole,
+      role: markdownGeneratorRole,
       environment: {
         DDB_TABLE_NAME: rssHistoryTable.tableName,
         S3_BUCKET_NAME: summaryBucket.bucketName,
       },
     });
-    // cdk.Tags.of(weeklySummaryCreator).add(Tags.keys.purpose, Tags.values.purpose);
+    // cdk.Tags.of(markdownGenerator).add(Tags.keys.purpose, Tags.values.purpose);
 
-    // 週間サマリー作成のスケジュールルールを設定（毎週月曜日の午前9時）
-    const weeklySummaryRule = new Rule(this, 'WeeklySummaryRule', {
+    // Markdown生成のスケジュールルールを設定（毎日午前8時）
+    const markdownGeneratorRule = new Rule(this, 'MarkdownGeneratorRule', {
       schedule: Schedule.cron({
         minute: '0',
-        hour: '9',
+        hour: '8',
         weekDay: '1',
       }),
       enabled: true,
     });
 
-    weeklySummaryRule.addTarget(
-      new LambdaFunction(weeklySummaryCreator, {
+    markdownGeneratorRule.addTarget(
+      new LambdaFunction(markdownGenerator, {
+        event: RuleTargetInput.fromObject({ days: 7 }),
         retryAttempts: 2,
       })
     );
