@@ -39,11 +39,13 @@ def get_news_from_last_n_days(days=7):
             response = table.scan(ExclusiveStartKey=response['LastEvaluatedKey'])
             items.extend(response['Items'])
         
-        # 日付でフィルタリング
+        # 日付とカテゴリでフィルタリング
         filtered_items = []
         for item in items:
             if 'pubtime' in item and item['pubtime'] >= start_date:
-                filtered_items.append(item)
+                # "What's new"カテゴリのアイテムのみをフィルタリング
+                if item.get('category') == "Whats new":
+                    filtered_items.append(item)
         
         # 日付順にソート
         filtered_items.sort(key=lambda x: x['pubtime'], reverse=False)
@@ -106,6 +108,7 @@ def generate_markdown(news_items, days=7):
             title = item.get('title', 'タイトルなし')
             url = item.get('url', '')
             pubtime = item.get('pubtime', '')
+            detail = item.get('detail', '')
             
             # 日付を整形
             try:
@@ -115,6 +118,10 @@ def generate_markdown(news_items, days=7):
             
             markdown += f"### [{title}]({url})\n"
             markdown += f"**公開日:** {pub_date}\n\n"
+            
+            # 詳細情報が存在する場合は追加
+            if detail:
+                markdown += f"{detail}\n\n"
     
     return markdown
 
@@ -158,16 +165,16 @@ def handler(event, context):
         # 現在の日付を取得
         now = datetime.datetime.now()
         # 週間サマリー用のファイル名
-        filename = f"aws-weekly-updates-{now.strftime('%Y-%m-%d')}.md"
+        filename = f"weekly-summaries/{now.strftime('%Y/%m/%d')}/{now.strftime('%Y%m%d')}-aws-weekly-updates.md"
         
         # 過去N日間のニュースを取得
         news_items = get_news_from_last_n_days(days)
         
         if not news_items:
-            print(f"過去{days}日間のニュースが見つかりませんでした")
+            print(f"過去{days}日間のWhat's newニュースが見つかりませんでした")
             return {
                 'statusCode': 404,
-                'body': json.dumps({'message': f'過去{days}日間のニュースが見つかりませんでした'})
+                'body': json.dumps({'message': f'過去{days}日間のWhat\'s newニュースが見つかりませんでした'})
             }
         
         # Markdownを生成
@@ -181,7 +188,7 @@ def handler(event, context):
                 return {
                     'statusCode': 200,
                     'body': json.dumps({
-                        'message': '週間サマリーのMarkdownファイルが正常に生成されました',
+                        'message': '週間What\'s newサマリーのMarkdownファイルが正常に生成されました',
                         's3_location': s3_url,
                         'news_count': len(news_items)
                     })
@@ -191,7 +198,7 @@ def handler(event, context):
         return {
             'statusCode': 200,
             'body': json.dumps({
-                'message': '週間サマリーのMarkdownが正常に生成されましたが、S3には保存されていません',
+                'message': '週間What\'s newサマリーのMarkdownが正常に生成されましたが、S3には保存されていません',
                 'markdown': markdown_content,
                 'news_count': len(news_items)
             })
