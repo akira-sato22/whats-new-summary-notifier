@@ -4,15 +4,13 @@ import { Table, AttributeType, BillingMode, StreamViewType } from 'aws-cdk-lib/a
 import { Rule, Schedule, RuleTargetInput, CronOptions } from 'aws-cdk-lib/aws-events';
 import { LambdaFunction } from 'aws-cdk-lib/aws-events-targets';
 import { Role, Policy, ServicePrincipal, PolicyStatement, Effect } from 'aws-cdk-lib/aws-iam';
-import { Runtime, StartingPosition, Code, Function } from 'aws-cdk-lib/aws-lambda';
+import { Runtime, StartingPosition } from 'aws-cdk-lib/aws-lambda';
 import { DynamoEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
 import { PythonFunction } from '@aws-cdk/aws-lambda-python-alpha';
 import { RetentionDays } from 'aws-cdk-lib/aws-logs';
 import { StringParameter } from 'aws-cdk-lib/aws-ssm';
 import { BlockPublicAccess, Bucket } from 'aws-cdk-lib/aws-s3';
 import * as path from 'path';
-
-import { Tags } from './tags';
 
 export class WhatsNewSummaryNotifierStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
@@ -224,9 +222,13 @@ export class WhatsNewSummaryNotifierStack extends cdk.Stack {
       parameterName: '/WhatsNew/SLACK_BOT_TOKEN',
     }).grantRead(markdownGeneratorRole);
     // SlackチャンネルIDへのアクセス権限を追加
-    StringParameter.fromSecureStringParameterAttributes(this, 'SlackChannelIdForMarkdownGenerator', {
-      parameterName: '/WhatsNew/SLACK_CHANNEL_ID',
-    }).grantRead(markdownGeneratorRole);
+    StringParameter.fromSecureStringParameterAttributes(
+      this,
+      'SlackChannelIdForMarkdownGenerator',
+      {
+        parameterName: '/WhatsNew/SLACK_CHANNEL_ID',
+      }
+    ).grantRead(markdownGeneratorRole);
 
     // Markdown生成のスケジュールルールを設定（毎日午前8時）
     const markdownGeneratorRule = new Rule(this, 'MarkdownGeneratorRule', {
