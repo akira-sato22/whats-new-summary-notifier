@@ -146,12 +146,12 @@ def summarize_blog(
     persona_data = f"""
     <persona> {persona} </persona>
     """
-    system = [{ "text" : persona_data}]
+    system = [{"text": persona_data}]
 
     prompt_data = f"""
     <input>{blog_body}</input>
-    <instruction>Describe a new update in <input></input> tags in bullet points to describe "What is described", "Who is this update good for" in a way that a new engineer can follow. 
-    Description shall be output in <thinking></thinking> tags and each thinking sentence must start with the bullet point "- " . 
+    <instruction>Describe a new update in <input></input> tags in detailed sentences to describe "What is described", "Who is this update good for" in a way that a new engineer can follow. 
+    Description shall be output in <details></details> tags as clear and detailed explanations rather than bullet points. 
     Make final summary as per <summaryRule></summaryRule> tags. 
     Try to shorten output for easy reading. 
     You are not allowed to utilize any information except in the input. 
@@ -159,28 +159,15 @@ def summarize_blog(
     <outputLanguage> {language} </outputLanguage>
     <summaryRule>The final summary must consist of at least three sentences, including specific use cases in which it is useful.
     Output format is defined in <outputFormat></outputFormat> tags.</summaryRule>
-    <outputFormat><thinking>(bullet points of the input)</thinking><summary>(final summary)</summary></outputFormat>
+    <outputFormat><details>(detailed explanation of the input)</details><summary>(final summary)</summary></outputFormat>
     Follow the instruction.
     """
 
-    messages = [
-        {
-            "role": "user", 
-            "content": [{"text": prompt_data}]
-        }
-    ]
+    messages = [{"role": "user", "content": [{"text": prompt_data}]}]
 
-    inf_params = {
-        "maxTokens": 4096,
-        "topP": 0.1,
-        "temperature": 0.5
-    }
+    inf_params = {"maxTokens": 4096, "topP": 0.1, "temperature": 0.5}
 
-    additionalModelRequestFields = {
-        "inferenceConfig": {
-            "topK": 20
-        }
-    }
+    additionalModelRequestFields = {"inferenceConfig": {"topK": 20}}
 
     outputText = "\n"
 
@@ -190,14 +177,16 @@ def summarize_blog(
             messages=messages,
             system=system,
             inferenceConfig=inf_params,
-            additionalModelRequestFields=additionalModelRequestFields
+            additionalModelRequestFields=additionalModelRequestFields,
         )
         # response_body = json.loads(response.get("body").read().decode())
-        outputText = beginning_word + response['output']['message']['content'][0]['text']
+        outputText = (
+            beginning_word + response["output"]["message"]["content"][0]["text"]
+        )
         print(outputText)
         # extract contant inside <summary> tag
         summary = re.findall(r"<summary>([\s\S]*?)</summary>", outputText)[0]
-        detail = re.findall(r"<thinking>([\s\S]*?)</thinking>", outputText)[0]
+        detail = re.findall(r"<details>([\s\S]*?)</details>", outputText)[0]
     except ClientError as error:
         if error.response["Error"]["Code"] == "AccessDeniedException":
             print(
@@ -219,11 +208,12 @@ def push_notification(item_list):
     """
 
     for item in item_list:
-        
         notifier = NOTIFIERS[item["rss_notifier_name"]]
         webhook_url_parameter_name = notifier["webhookUrlParameterName"]
         destination = notifier["destination"]
-        ssm_response = ssm.get_parameter(Name=webhook_url_parameter_name, WithDecryption=True)
+        ssm_response = ssm.get_parameter(
+            Name=webhook_url_parameter_name, WithDecryption=True
+        )
         app_webhook_url = ssm_response["Parameter"]["Value"]
         # blog_genre = list(notifier["rssUrl"].keys())[0]
         item_url = item["rss_link"]
@@ -233,32 +223,38 @@ def push_notification(item_list):
 
         # Summarize the blog
         summarizer = SUMMARIZERS[notifier["summarizerName"]]
-        summary, detail = summarize_blog(content, language=summarizer["outputLanguage"], persona=summarizer["persona"])
+        summary, detail = summarize_blog(
+            content,
+            language=summarizer["outputLanguage"],
+            persona=summarizer["persona"],
+        )
 
         # Add the summary text to notified message
         item["summary"] = summary
         item["detail"] = detail
-        
+
         # Update DynamoDB with the summary and detail
         try:
             update_expression = "SET summary = :summary, detail = :detail"
-            expression_values = {
-                ":summary": summary,
-                ":detail": detail
-            }
-            
+            expression_values = {":summary": summary, ":detail": detail}
+
             table.update_item(
                 Key={
                     "url": item["rss_link"],
-                    "notifier_name": item["rss_notifier_name"]
+                    "notifier_name": item["rss_notifier_name"],
                 },
                 UpdateExpression=update_expression,
-                ExpressionAttributeValues=expression_values
+                ExpressionAttributeValues=expression_values,
             )
             print(f"Updated DynamoDB with summary and detail for {item['rss_title']}")
         except Exception as e:
             print(f"Error updating DynamoDB: {str(e)}")
-        
+
+        # "Whats new"カテゴリでない場合は通知をスキップ
+        if item.get("rss_category") != "Whats new":
+            print(f"Skipping notification for category: {item.get('rss_category')}")
+            continue
+
         # item["blog_genre"] = blog_genre
         if destination == "teams":
             item["detail"] = item["detail"].replace("。\n", "。\r")
@@ -293,13 +289,17 @@ def get_new_entries(blog_entries):
                 "rss_time": entry["dynamodb"]["NewImage"]["pubtime"]["S"],
                 "rss_title": entry["dynamodb"]["NewImage"]["title"]["S"],
                 "rss_link": entry["dynamodb"]["NewImage"]["url"]["S"],
-                "rss_notifier_name": entry["dynamodb"]["NewImage"]["notifier_name"]["S"],
+                "rss_notifier_name": entry["dynamodb"]["NewImage"]["notifier_name"][
+                    "S"
+                ],
             }
             # MODIFYの場合、重要なフィールドに変更があった場合のみ通知
             if entry["eventName"] == "MODIFY":
                 old_image = entry["dynamodb"].get("OldImage", {})
-                if (old_image.get("title", {}).get("S") == new_data["rss_title"] and
-                    old_image.get("url", {}).get("S") == new_data["rss_link"]):
+                if (
+                    old_image.get("title", {}).get("S") == new_data["rss_title"]
+                    and old_image.get("url", {}).get("S") == new_data["rss_link"]
+                ):
                     continue
             print(f"New data extracted: {json.dumps(new_data, indent=2)}")
             res_list.append(new_data)
