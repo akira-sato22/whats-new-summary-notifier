@@ -20,7 +20,7 @@ Configure the delivery settings to the application.
 * `summarizerName`: The name of the summarizer to use for delivery.
 * `webhookUrlParameterName`: The name of the AWS Systems Manager Parameter Store parameter that stores the Webhook URL.
 * `rssUrl`: The RSS feed URL of the website from which you want to get the latest information. Multiple URLs can be specified.
-* `schedule` (optional): The interval for retrieving the RSS feed in CRON format. If this parameter is not specified, the feed will be retrieved at 00 minutes every hour. In the example below, the feed will be retrieved every 15 minutes.
+* `schedule` (optional): The interval for retrieving the RSS feed in CRON format. If this parameter is not specified, the feed will be retrieved every 30 minutes (at 00 and 30 minutes of every hour). In the example below, the feed will be retrieved every 15 minutes.
 
 ```json
 ...

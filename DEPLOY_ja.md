@@ -20,7 +20,7 @@
 * `summarizerName`: 配信に使用する summarizer の名前。
 * `webhookUrlParameterName`: Webhook URL を格納している AWS Systems Manager Parameter Store のパラメータ名。
 * `rssUrl`: 最新情報を取得したい Web サイトの RSS フィード URL。URL は複数指定する事が可能です。
-* `schedule` (オプション): CRON 形式の RSS フィード取得間隔。本パラメータの指定がない場合は、毎時 00 分にフィードを取得します。下記の例の場合は、15 分に一度フィード取得が行われます。
+* `schedule` (オプション): CRON 形式の RSS フィード取得間隔。本パラメータの指定がない場合は、30 分に一度 (毎時 00 分と 30 分) フィードを取得します。下記の例の場合は、15 分に一度フィード取得が行われます。
 
 ```json
 ...

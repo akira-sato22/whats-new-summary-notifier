@@ -216,9 +216,9 @@ export class WhatsNewSummaryNotifierStack extends cdk.Stack {
     );
 
     for (const [notifierName, notifier] of Object.entries(notifiers)) {
-      // Use the notifier's cron options if defined, otherwise run every hour
+      // Use the notifier's cron options if defined, otherwise run every 30 minutes
       const schedule: CronOptions = notifier.schedule || {
-        minute: '0',
+        minute: '*/30',
         hour: '*',
         day: '*',
         month: '*',

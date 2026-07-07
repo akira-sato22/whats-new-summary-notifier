@@ -45,7 +45,7 @@
                     "AWS Big Data Blog": "https://aws.amazon.com/blogs/big-data/feed/"
                 },
                 "schedule": {
-                    "minute": "0",
+                    "minute": "*/30",
                     "hour": "*",
                     "day": "*",
                     "month": "*",
