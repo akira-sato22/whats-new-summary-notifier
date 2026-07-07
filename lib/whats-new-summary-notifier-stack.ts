@@ -153,7 +153,7 @@ export class WhatsNewSummaryNotifierStack extends cdk.Stack {
     );
 
     // Lambda Function to fetch RSS and write to DynamoDB
-    const newsCrawler = new PythonFunction(this, `newsCrawler`, {
+    const newsCrawler = new PythonFunction(this, 'newsCrawler', {
       functionName: 'WhatsNewSummary-Crawler',
       runtime: Runtime.PYTHON_3_11,
       entry: path.join(__dirname, '../lambda/rss-crawler'),
@@ -164,7 +164,6 @@ export class WhatsNewSummaryNotifierStack extends cdk.Stack {
       role: newsCrawlerRole,
       environment: {
         DDB_TABLE_NAME: rssHistoryTable.tableName,
-        NOTIFIERS: JSON.stringify(notifiers),
       },
     });
 
