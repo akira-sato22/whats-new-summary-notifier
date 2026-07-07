@@ -19,9 +19,30 @@ NOTIFIERS = json.loads(os.environ["NOTIFIERS"])
 SUMMARIZERS = json.loads(os.environ["SUMMARIZERS"])
 DDB_TABLE_NAME = os.environ.get("DDB_TABLE_NAME", "AWSUpdatesRSSHistory")
 
+# 要約対象の記事本文の最大文字数（超過分は切り詰める）
+MAX_BLOG_BODY_CHARS = 50000
+
 ssm = boto3.client("ssm")
 dynamo = boto3.resource("dynamodb")
 table = dynamo.Table(DDB_TABLE_NAME)
+
+# Webhook URLはウォームスタート間で再利用する
+webhook_url_cache = {}
+
+
+def get_webhook_url(parameter_name):
+    """Get a webhook URL from Parameter Store, caching it across warm invocations
+
+    Args:
+        parameter_name (str): The name of the Parameter Store parameter
+
+    Returns:
+        str: The webhook URL
+    """
+    if parameter_name not in webhook_url_cache:
+        response = ssm.get_parameter(Name=parameter_name, WithDecryption=True)
+        webhook_url_cache[parameter_name] = response["Parameter"]["Value"]
+    return webhook_url_cache[parameter_name]
 
 
 def get_blog_content(url):
@@ -77,6 +98,10 @@ def summarize_blog(
 
     boto3_bedrock = boto3.client("bedrock-runtime", region_name=MODEL_REGION)
 
+    if len(blog_body) > MAX_BLOG_BODY_CHARS:
+        print(f"Input is too long. Truncating to {MAX_BLOG_BODY_CHARS} characters")
+        blog_body = blog_body[:MAX_BLOG_BODY_CHARS]
+
     system_text = (
         f"You are a {persona}. "
         "You read AWS update announcements and blog posts, and explain them accurately and clearly "
@@ -97,7 +122,12 @@ Follow these rules:
 - Output exactly in the following format, with no text before or after it:
 
 <details>(detailed explanation of the article)</details>
-<summary>(summary)</summary>"""
+<summary>(summary)</summary>
+
+Here is an example that shows the expected style and level of detail. Write your actual output about the article above, in the language specified for you:
+
+<details>AWS announced that Amazon Example Service now supports feature X in all commercial regions. Previously, users had to configure Y manually for each workload, but with this update the service handles Y automatically, which reduces operational work and the risk of misconfiguration. This update mainly benefits teams that operate Z at scale, because they no longer need to build and maintain custom scripts for Y.</details>
+<summary>Amazon Example Service now supports feature X, which automates Y without manual configuration. This is useful for teams operating Z at scale, as it removes the need for custom scripts. For example, a team running large batch workloads can now let the service handle Y automatically and focus on their application logic.</summary>"""
 
     messages = [{"role": "user", "content": [{"text": prompt_data}]}]
 
@@ -142,12 +172,8 @@ def push_notification(item_list):
 
     for item in item_list:
         notifier = NOTIFIERS[item["rss_notifier_name"]]
-        webhook_url_parameter_name = notifier["webhookUrlParameterName"]
         destination = notifier["destination"]
-        ssm_response = ssm.get_parameter(
-            Name=webhook_url_parameter_name, WithDecryption=True
-        )
-        app_webhook_url = ssm_response["Parameter"]["Value"]
+        app_webhook_url = get_webhook_url(notifier["webhookUrlParameterName"])
         item_url = item["rss_link"]
 
         # Get the blog context

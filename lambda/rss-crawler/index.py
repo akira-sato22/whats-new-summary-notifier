@@ -4,7 +4,6 @@
 import boto3
 import datetime
 import feedparser
-import json
 import os
 import dateutil.parser
 from botocore.exceptions import ClientError
@@ -93,12 +92,16 @@ def add_blog(rss_name, entries, notifier_name):
     """
 
     for entry in entries:
-        if recently_published(entry["published"]):
+        published = entry.get("published")
+        if not published:
+            print("Entry without published date. skip: " + entry.get("title", "(no title)"))
+            continue
+        if recently_published(published):
             write_to_table(
                 entry["link"],
                 entry["title"],
                 rss_name,
-                str2datetime(entry["published"]).isoformat(),
+                str2datetime(published).isoformat(),
                 notifier_name,
             )
         else:
@@ -113,11 +116,24 @@ def handler(event, context):
     rss_urls = notifier["rssUrl"]
     for rss_name, rss_url in rss_urls.items():
         rss_result = feedparser.parse(rss_url)
-        print(json.dumps(rss_result))
-        print("RSS updated " + rss_result["feed"]["updated"])
-        if not recently_published(rss_result["feed"]["updated"]):
-            # Do not process RSS feeds that have not been updated for a certain period of time.
-            # If you want to retrieve from the past, change this number of days and re-import.
-            print("Skip RSS " + rss_name)
+        if rss_result.get("bozo"):
+            print(
+                f"Warning: RSS {rss_name} was not parsed cleanly: "
+                f"{rss_result.get('bozo_exception')}"
+            )
+
+        entries = rss_result.get("entries", [])
+        if not entries:
+            print(f"No entries found in RSS {rss_name}. skip")
             continue
-        add_blog(rss_name, rss_result["entries"], notifier_name)
+        print(f"Fetched RSS {rss_name}: {len(entries)} entries")
+
+        feed_updated = rss_result.get("feed", {}).get("updated")
+        if feed_updated:
+            print("RSS updated " + feed_updated)
+            if not recently_published(feed_updated):
+                # Do not process RSS feeds that have not been updated for a certain period of time.
+                # If you want to retrieve from the past, change this number of days and re-import.
+                print("Skip RSS " + rss_name)
+                continue
+        add_blog(rss_name, entries, notifier_name)
