@@ -9,8 +9,6 @@ import traceback
 
 import urllib.request
 
-from typing import Optional
-from botocore.config import Config
 from bs4 import BeautifulSoup
 from botocore.exceptions import ClientError
 import re
@@ -36,92 +34,30 @@ def get_blog_content(url):
         str: The content of the blog post, or None if it cannot be retrieved.
     """
 
+    if not url.lower().startswith(("http://", "https://")):
+        print(f"Invalid URL scheme: {url}")
+        return None
+
     try:
-        if url.lower().startswith(("http://", "https://")):
-            # Use the `with` statement to ensure the response is properly closed
-            with urllib.request.urlopen(url) as response:
-                html = response.read()
-                if response.getcode() == 200:
-                    soup = BeautifulSoup(html, "html.parser")
-                    main = soup.find("main")
+        # Use the `with` statement to ensure the response is properly closed
+        with urllib.request.urlopen(url) as response:
+            status_code = response.getcode()
+            if status_code != 200:
+                print(f"Error accessing {url}, status code {status_code}")
+                return None
 
-                    if main:
-                        return main.text
-                    else:
-                        return None
+            soup = BeautifulSoup(response.read(), "html.parser")
+            main = soup.find("main")
 
-        else:
-            print(f"Error accessing {url}, status code {response.getcode()}")
-            return None
+            if main is None:
+                print(f"No <main> element found in {url}")
+                return None
+
+            return main.text
 
     except urllib.error.URLError as e:
         print(f"Error accessing {url}: {e.reason}")
         return None
-
-
-def get_bedrock_client(
-    assumed_role: Optional[str] = None,
-    region: Optional[str] = None,
-    runtime: Optional[bool] = True,
-):
-    """Create a boto3 client for Amazon Bedrock, with optional configuration overrides
-
-    Args:
-        assumed_role (Optional[str]): Optional ARN of an AWS IAM role to assume for calling the Bedrock service. If not
-            specified, the current active credentials will be used.
-        region (Optional[str]): Optional name of the AWS Region in which the service should be called (e.g. "us-east-1").
-            If not specified, AWS_REGION or AWS_DEFAULT_REGION environment variable will be used.
-        runtime (Optional[bool]): Optional choice of getting different client to perform operations with the Amazon Bedrock service.
-    """
-
-    if region is None:
-        target_region = os.environ.get(
-            "AWS_REGION", os.environ.get("AWS_DEFAULT_REGION")
-        )
-    else:
-        target_region = region
-
-    print(f"Create new client\n  Using region: {target_region}")
-    session_kwargs = {"region_name": target_region}
-    client_kwargs = {**session_kwargs}
-
-    profile_name = os.environ.get("AWS_PROFILE")
-    if profile_name:
-        print(f"  Using profile: {profile_name}")
-        session_kwargs["profile_name"] = profile_name
-
-    retry_config = Config(
-        region_name=target_region,
-        retries={
-            "max_attempts": 10,
-            "mode": "standard",
-        },
-    )
-    session = boto3.Session(**session_kwargs)
-
-    if assumed_role:
-        print(f"  Using role: {assumed_role}", end="")
-        sts = session.client("sts")
-        response = sts.assume_role(
-            RoleArn=str(assumed_role), RoleSessionName="langchain-llm-1"
-        )
-        print(" ... successful!")
-        client_kwargs["aws_access_key_id"] = response["Credentials"]["AccessKeyId"]
-        client_kwargs["aws_secret_access_key"] = response["Credentials"][
-            "SecretAccessKey"
-        ]
-        client_kwargs["aws_session_token"] = response["Credentials"]["SessionToken"]
-
-    if runtime:
-        service_name = "bedrock-runtime"
-    else:
-        service_name = "bedrock"
-
-    bedrock_client = session.client(
-        service_name=service_name, config=retry_config, **client_kwargs
-    )
-
-    return bedrock_client
 
 
 def summarize_blog(
@@ -136,7 +72,7 @@ def summarize_blog(
         persona (str): The persona to use for the summary
 
     Returns:
-        str: The summarized text
+        tuple: (summary, detail), or (None, None) if summarization fails
     """
 
     boto3_bedrock = boto3.client("bedrock-runtime", region_name=MODEL_REGION)
@@ -169,8 +105,6 @@ def summarize_blog(
 
     additionalModelRequestFields = {"inferenceConfig": {"topK": 20}}
 
-    outputText = "\n"
-
     try:
         response = boto3_bedrock.converse(
             modelId=MODEL_ID,
@@ -179,14 +113,17 @@ def summarize_blog(
             inferenceConfig=inf_params,
             additionalModelRequestFields=additionalModelRequestFields,
         )
-        # response_body = json.loads(response.get("body").read().decode())
         outputText = (
             beginning_word + response["output"]["message"]["content"][0]["text"]
         )
         print(outputText)
-        # extract contant inside <summary> tag
+        # extract content inside <summary> and <details> tags
         summary = re.findall(r"<summary>([\s\S]*?)</summary>", outputText)[0]
         detail = re.findall(r"<details>([\s\S]*?)</details>", outputText)[0]
+        return summary, detail
+    except IndexError:
+        print("Failed to extract <summary> or <details> tags from the model output")
+        return None, None
     except ClientError as error:
         if error.response["Error"]["Code"] == "AccessDeniedException":
             print(
@@ -194,10 +131,8 @@ def summarize_blog(
             \nTo troubeshoot this issue please refer to the following resources.\ \nhttps://docs.aws.amazon.com/IAM/latest/UserGuide/troubleshoot_access-denied.html\
             \nhttps://docs.aws.amazon.com/bedrock/latest/userguide/security-iam.html\x1b[0m\n"
             )
-        else:
-            raise error
-
-    return summary, detail
+            return None, None
+        raise error
 
 
 def push_notification(item_list):
@@ -215,11 +150,13 @@ def push_notification(item_list):
             Name=webhook_url_parameter_name, WithDecryption=True
         )
         app_webhook_url = ssm_response["Parameter"]["Value"]
-        # blog_genre = list(notifier["rssUrl"].keys())[0]
         item_url = item["rss_link"]
 
         # Get the blog context
         content = get_blog_content(item_url)
+        if content is None:
+            print(f"Skip summarization because content is unavailable: {item_url}")
+            continue
 
         # Summarize the blog
         summarizer = SUMMARIZERS[notifier["summarizerName"]]
@@ -228,6 +165,9 @@ def push_notification(item_list):
             language=summarizer["outputLanguage"],
             persona=summarizer["persona"],
         )
+        if summary is None or detail is None:
+            print(f"Skip notification because summarization failed: {item_url}")
+            continue
 
         # Add the summary text to notified message
         item["summary"] = summary
@@ -255,7 +195,6 @@ def push_notification(item_list):
             print(f"Skipping notification for category: {item.get('rss_category')}")
             continue
 
-        # item["blog_genre"] = blog_genre
         if destination == "teams":
             item["detail"] = item["detail"].replace("。\n", "。\r")
             msg = create_teams_message(item)
@@ -423,5 +362,5 @@ def handler(event, context):
         new_data = get_new_entries(event["Records"])
         if 0 < len(new_data):
             push_notification(new_data)
-    except Exception as e:
-        print(traceback.print_exc())
+    except Exception:
+        traceback.print_exc()
