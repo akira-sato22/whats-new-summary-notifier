@@ -77,31 +77,31 @@ def summarize_blog(
 
     boto3_bedrock = boto3.client("bedrock-runtime", region_name=MODEL_REGION)
 
-    beginning_word = "<output>"
+    system_text = (
+        f"You are a {persona}. "
+        "You read AWS update announcements and blog posts, and explain them accurately and clearly "
+        "to engineers who are not yet familiar with the topic. "
+        f"Write all output in {language}"
+    )
+    system = [{"text": system_text}]
 
-    persona_data = f"""
-    <persona> {persona} </persona>
-    """
-    system = [{"text": persona_data}]
+    prompt_data = f"""Read the article inside <input></input> tags, then write a detailed explanation and a summary of it.
 
-    prompt_data = f"""
-    <input>{blog_body}</input>
-    <instruction>Describe a new update in <input></input> tags in detailed sentences to describe "What is described", "Who is this update good for" in a way that a new engineer can follow. 
-    Description shall be output in <details></details> tags as clear and detailed explanations rather than bullet points. 
-    Make final summary as per <summaryRule></summaryRule> tags. 
-    Try to shorten output for easy reading. 
-    You are not allowed to utilize any information except in the input. 
-    Output format shall be in accordance with <outputFormat></outputFormat> tags.</instruction>
-    <outputLanguage> {language} </outputLanguage>
-    <summaryRule>The final summary must consist of at least three sentences, including specific use cases in which it is useful.
-    Output format is defined in <outputFormat></outputFormat> tags.</summaryRule>
-    <outputFormat><details>(detailed explanation of the input)</details><summary>(final summary)</summary></outputFormat>
-    Follow the instruction.
-    """
+<input>{blog_body}</input>
+
+Follow these rules:
+- Use only information contained in the article. Do not add outside knowledge or speculation.
+- In the detailed explanation, describe "what is announced" and "who benefits from this update" in clear, flowing sentences (not bullet points) that an engineer new to the topic can follow.
+- The summary must consist of at least three sentences and include specific use cases in which the update is useful.
+- Keep the whole output concise and easy to read.
+- Output exactly in the following format, with no text before or after it:
+
+<details>(detailed explanation of the article)</details>
+<summary>(summary)</summary>"""
 
     messages = [{"role": "user", "content": [{"text": prompt_data}]}]
 
-    inf_params = {"maxTokens": 4096, "topP": 0.1, "temperature": 0.5}
+    inf_params = {"maxTokens": 4096, "topP": 0.9, "temperature": 0.3}
 
     additionalModelRequestFields = {"inferenceConfig": {"topK": 20}}
 
@@ -113,9 +113,7 @@ def summarize_blog(
             inferenceConfig=inf_params,
             additionalModelRequestFields=additionalModelRequestFields,
         )
-        outputText = (
-            beginning_word + response["output"]["message"]["content"][0]["text"]
-        )
+        outputText = response["output"]["message"]["content"][0]["text"]
         print(outputText)
         # extract content inside <summary> and <details> tags
         summary = re.findall(r"<summary>([\s\S]*?)</summary>", outputText)[0]
