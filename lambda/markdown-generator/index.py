@@ -231,7 +231,7 @@ def save_to_s3(markdown_content, group_name, filename):
         return False
 
 
-def push_to_slack(markdown_content, news_count, group_name):
+def push_to_slack(markdown_content, news_count, group_name, s3_location=None):
     """
     Slackにメッセージとファイルを送信する（グループ別）
 
@@ -239,6 +239,7 @@ def push_to_slack(markdown_content, news_count, group_name):
         markdown_content (str): Markdownの内容
         news_count (int): ニュース数
         group_name (str): グループ名（"whats-new" または "others"）
+        s3_location (str): S3の保存先URI（省略可）
     """
     try:
         # SlackチャンネルIDを取得
@@ -264,6 +265,8 @@ def push_to_slack(markdown_content, news_count, group_name):
 
         # 初期メッセージを作成
         initial_message = f"AWS 週間アップデート情報 - {group_info['display_name']} {group_info['emoji']}\n更新件数: {news_count}件"
+        if s3_location:
+            initial_message += f"\n保存先: `{s3_location}`"
 
         # ファイルをアップロード
         try:
@@ -352,6 +355,7 @@ def handler(event, context):
                         markdown_content=markdown_content,
                         news_count=len(group_items),
                         group_name=group_name,
+                        s3_location=s3_url,
                     )
                     group_response["slack_notification"] = (
                         "success" if slack_success else "failed"
