@@ -12,6 +12,22 @@ import { StringParameter } from 'aws-cdk-lib/aws-ssm';
 import { BlockPublicAccess, Bucket } from 'aws-cdk-lib/aws-s3';
 import * as path from 'path';
 
+interface SummarizerConfig {
+  outputLanguage: string;
+  persona: string;
+}
+
+interface NotifierConfig {
+  destination: 'slack' | 'teams';
+  summarizerName: string;
+  webhookUrlParameterName: string;
+  rssUrl: Record<string, string>;
+  schedule?: CronOptions;
+}
+
+const SLACK_BOT_TOKEN_PARAMETER_NAME = '/WhatsNew/SLACK_BOT_TOKEN';
+const SLACK_CHANNEL_ID_PARAMETER_NAME = '/WhatsNew/SLACK_CHANNEL_ID';
+
 export class WhatsNewSummaryNotifierStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
@@ -19,119 +35,78 @@ export class WhatsNewSummaryNotifierStack extends cdk.Stack {
     const region = cdk.Stack.of(this).region;
     const accountId = cdk.Stack.of(this).account;
 
-    const modelRegion = this.node.tryGetContext('modelRegion');
-    const modelId = this.node.tryGetContext('modelId');
+    const modelRegion: string = this.node.tryGetContext('modelRegion');
+    const modelId: string = this.node.tryGetContext('modelId');
 
-    const notifiers: [] = this.node.tryGetContext('notifiers');
-    const summarizers: [] = this.node.tryGetContext('summarizers');
+    const notifiers: Record<string, NotifierConfig> = this.node.tryGetContext('notifiers');
+    const summarizers: Record<string, SummarizerConfig> = this.node.tryGetContext('summarizers');
+
+    // Lambda 用ロールを作成し、CloudWatch Logs への書き込み権限と追加ポリシーを付与する
+    const createLambdaRole = (
+      roleId: string,
+      policyId: string,
+      extraStatements: PolicyStatement[] = []
+    ): Role => {
+      const role = new Role(this, roleId, {
+        assumedBy: new ServicePrincipal('lambda.amazonaws.com'),
+      });
+      role.attachInlinePolicy(
+        new Policy(this, policyId, {
+          statements: [
+            new PolicyStatement({
+              actions: ['logs:CreateLogGroup', 'logs:CreateLogStream', 'logs:PutLogEvents'],
+              effect: Effect.ALLOW,
+              resources: [`arn:aws:logs:${region}:${accountId}:log-group:*`],
+            }),
+            ...extraStatements,
+          ],
+        })
+      );
+      return role;
+    };
 
     // Role for Lambda Function to post new entries written to DynamoDB to Slack or Microsoft Teams
-    const notifyNewEntryRole = new Role(this, 'NotifyNewEntryRole', {
-      assumedBy: new ServicePrincipal('lambda.amazonaws.com'),
-    });
-    notifyNewEntryRole.attachInlinePolicy(
-      new Policy(this, 'AllowNotifyNewEntryLogging', {
-        statements: [
-          new PolicyStatement({
-            actions: ['logs:CreateLogGroup', 'logs:CreateLogStream', 'logs:PutLogEvents'],
-            effect: Effect.ALLOW,
-            resources: [`arn:aws:logs:${region}:${accountId}:log-group:*`],
-          }),
-          new PolicyStatement({
-            actions: ['bedrock:InvokeModel'],
-            effect: Effect.ALLOW,
-            resources: ['*'],
-          }),
-        ],
-      })
+    const notifyNewEntryRole = createLambdaRole(
+      'NotifyNewEntryRole',
+      'AllowNotifyNewEntryLogging',
+      [
+        new PolicyStatement({
+          actions: ['bedrock:InvokeModel'],
+          effect: Effect.ALLOW,
+          resources: [
+            'arn:aws:bedrock:*::foundation-model/*',
+            `arn:aws:bedrock:*:${accountId}:inference-profile/*`,
+          ],
+        }),
+      ]
     );
-    // cdk.Tags.of(notifyNewEntryRole).add(Tags.keys.purpose, Tags.values.purpose);
 
     // Role for Lambda function to fetch RSS and write to DynamoDB
-    const newsCrawlerRole = new Role(this, 'NewsCrawlerRole', {
-      assumedBy: new ServicePrincipal('lambda.amazonaws.com'),
-    });
-    newsCrawlerRole.attachInlinePolicy(
-      new Policy(this, 'AllowNewsCrawlerLogging', {
-        statements: [
-          new PolicyStatement({
-            actions: ['logs:CreateLogGroup', 'logs:CreateLogStream', 'logs:PutLogEvents'],
-            effect: Effect.ALLOW,
-            resources: [`arn:aws:logs:${region}:${accountId}:log-group:*`],
-          }),
-          // DynamoDBへのアクセス権限を追加
-          new PolicyStatement({
-            actions: [
-              'dynamodb:PutItem',
-              'dynamodb:GetItem',
-              'dynamodb:UpdateItem',
-              'dynamodb:DeleteItem',
-              'dynamodb:BatchGetItem',
-              'dynamodb:BatchWriteItem',
-              'dynamodb:Query',
-              'dynamodb:Scan',
-            ],
-            effect: Effect.ALLOW,
-            resources: [`arn:aws:dynamodb:${region}:${accountId}:table/AWSUpdatesRSSHistory`],
-          }),
-        ],
-      })
-    );
-    // cdk.Tags.of(newsCrawlerRole).add(Tags.keys.purpose, Tags.values.purpose);
+    const newsCrawlerRole = createLambdaRole('NewsCrawlerRole', 'AllowNewsCrawlerLogging');
 
-    // S3バケットを作成（週間サマリーPDFの保存用）
+    // Role for Lambda function to generate weekly summary markdown
+    const markdownGeneratorRole = createLambdaRole(
+      'MarkdownGeneratorRole',
+      'AllowMarkdownGeneratorLogging',
+      [
+        new PolicyStatement({
+          actions: ['ssm:GetParameter'],
+          effect: Effect.ALLOW,
+          resources: [
+            `arn:aws:ssm:${region}:${accountId}:parameter${SLACK_BOT_TOKEN_PARAMETER_NAME}`,
+            `arn:aws:ssm:${region}:${accountId}:parameter${SLACK_CHANNEL_ID_PARAMETER_NAME}`,
+          ],
+        }),
+      ]
+    );
+
+    // S3バケットを作成（週間サマリーMarkdownの保存用）
     const summaryBucket = new Bucket(this, 'WeeklySummaryBucket', {
       bucketName: `aws-whats-new-weekly-summary-${accountId}-${region}`,
       blockPublicAccess: BlockPublicAccess.BLOCK_ALL,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
       autoDeleteObjects: true,
     });
-    // cdk.Tags.of(summaryBucket).add(Tags.keys.purpose, Tags.values.purpose);
-
-    // 週間サマリー作成Lambda用のロール
-    const weeklySummaryRole = new Role(this, 'WeeklySummaryRole', {
-      assumedBy: new ServicePrincipal('lambda.amazonaws.com'),
-    });
-    weeklySummaryRole.attachInlinePolicy(
-      new Policy(this, 'AllowWeeklySummaryLogging', {
-        statements: [
-          new PolicyStatement({
-            actions: ['logs:CreateLogGroup', 'logs:CreateLogStream', 'logs:PutLogEvents'],
-            effect: Effect.ALLOW,
-            resources: [`arn:aws:logs:${region}:${accountId}:log-group:*`],
-          }),
-        ],
-      })
-    );
-
-    // S3へのアクセス権限を追加
-    summaryBucket.grantWrite(weeklySummaryRole);
-
-    // Markdown生成Lambda用のロール
-    const markdownGeneratorRole = new Role(this, 'MarkdownGeneratorRole', {
-      assumedBy: new ServicePrincipal('lambda.amazonaws.com'),
-    });
-    markdownGeneratorRole.attachInlinePolicy(
-      new Policy(this, 'AllowMarkdownGeneratorLogging', {
-        statements: [
-          new PolicyStatement({
-            actions: ['logs:CreateLogGroup', 'logs:CreateLogStream', 'logs:PutLogEvents'],
-            effect: Effect.ALLOW,
-            resources: [`arn:aws:logs:${region}:${accountId}:log-group:*`],
-          }),
-          new PolicyStatement({
-            actions: ['ssm:GetParameter'],
-            effect: Effect.ALLOW,
-            resources: [
-              `arn:aws:ssm:${region}:${accountId}:parameter/WhatsNew/SLACK_BOT_TOKEN`,
-              `arn:aws:ssm:${region}:${accountId}:parameter/WhatsNew/SLACK_CHANNEL_ID`,
-            ],
-          }),
-        ],
-      })
-    );
-
-    // S3へのアクセス権限を追加
     summaryBucket.grantWrite(markdownGeneratorRole);
 
     // DynamoDB to store RSS data
@@ -143,9 +118,12 @@ export class WhatsNewSummaryNotifierStack extends cdk.Stack {
       stream: StreamViewType.NEW_AND_OLD_IMAGES,
       timeToLiveAttribute: 'ttl',
     });
-    // cdk.Tags.of(rssHistoryTable).add(Tags.keys.purpose, Tags.values.purpose);
 
-    // DynamoDBの読み取り権限をMarkdown生成Lambda関数に付与
+    // Allow the crawler to read and write RSS history
+    rssHistoryTable.grantReadWriteData(newsCrawlerRole);
+    // Allow the notify-to-app Lambda to update items with summaries
+    rssHistoryTable.grantWriteData(notifyNewEntryRole);
+    // Allow the markdown generator to read RSS history
     rssHistoryTable.grantReadData(markdownGeneratorRole);
 
     // Lambda Function to post new entries written to DynamoDB to Slack or Microsoft Teams
@@ -173,14 +151,6 @@ export class WhatsNewSummaryNotifierStack extends cdk.Stack {
         batchSize: 1,
       })
     );
-    // cdk.Tags.of(notifyNewEntry).add(Tags.keys.purpose, Tags.values.purpose);
-
-    // Allow writing to DynamoDB
-    rssHistoryTable.grantWriteData(newsCrawlerRole);
-    // Allow reading from DynamoDB
-    rssHistoryTable.grantReadData(newsCrawlerRole);
-    // Allow the notify-to-app Lambda to update DynamoDB items
-    rssHistoryTable.grantWriteData(notifyNewEntryRole);
 
     // Lambda Function to fetch RSS and write to DynamoDB
     const newsCrawler = new PythonFunction(this, `newsCrawler`, {
@@ -197,7 +167,7 @@ export class WhatsNewSummaryNotifierStack extends cdk.Stack {
         NOTIFIERS: JSON.stringify(notifiers),
       },
     });
-    // cdk.Tags.of(newsCrawler).add(Tags.keys.purpose, Tags.values.purpose);
+
     // Markdown生成Lambda関数
     const markdownGenerator = new PythonFunction(this, 'MarkdownGenerator', {
       functionName: 'WhatsNewSummary-MarkdownGenerator',
@@ -211,26 +181,24 @@ export class WhatsNewSummaryNotifierStack extends cdk.Stack {
       environment: {
         DDB_TABLE_NAME: rssHistoryTable.tableName,
         S3_BUCKET_NAME: summaryBucket.bucketName,
-        SLACK_BOT_TOKEN_PARAMETER: '/WhatsNew/SLACK_BOT_TOKEN',
-        SLACK_CHANNEL_ID: '/WhatsNew/SLACK_CHANNEL_ID',
+        SLACK_BOT_TOKEN_PARAMETER: SLACK_BOT_TOKEN_PARAMETER_NAME,
+        SLACK_CHANNEL_ID_PARAMETER: SLACK_CHANNEL_ID_PARAMETER_NAME,
       },
     });
-    // cdk.Tags.of(markdownGenerator).add(Tags.keys.purpose, Tags.values.purpose);
 
-    // Slackトークンへのアクセス権限を追加
+    // Slackトークン・チャンネルIDパラメータへの読み取り権限を追加
     StringParameter.fromSecureStringParameterAttributes(this, 'SlackBotTokenForMarkdownGenerator', {
-      parameterName: '/WhatsNew/SLACK_BOT_TOKEN',
+      parameterName: SLACK_BOT_TOKEN_PARAMETER_NAME,
     }).grantRead(markdownGeneratorRole);
-    // SlackチャンネルIDへのアクセス権限を追加
     StringParameter.fromSecureStringParameterAttributes(
       this,
       'SlackChannelIdForMarkdownGenerator',
       {
-        parameterName: '/WhatsNew/SLACK_CHANNEL_ID',
+        parameterName: SLACK_CHANNEL_ID_PARAMETER_NAME,
       }
     ).grantRead(markdownGeneratorRole);
 
-    // Markdown生成のスケジュールルールを設定（毎日午前8時）
+    // Markdown生成のスケジュールルールを設定（毎週月曜 8:00 UTC）
     const markdownGeneratorRule = new Rule(this, 'MarkdownGeneratorRule', {
       schedule: Schedule.cron({
         minute: '0',
@@ -247,22 +215,20 @@ export class WhatsNewSummaryNotifierStack extends cdk.Stack {
       })
     );
 
-    for (const notifierName in notifiers) {
-      const notifier = notifiers[notifierName];
-      // const cron is a cronOption defined in a notifier. if it is not defined, set default schedule (every hour)
-      const schedule: CronOptions = notifier['schedule'] || {
+    for (const [notifierName, notifier] of Object.entries(notifiers)) {
+      // Use the notifier's cron options if defined, otherwise run every hour
+      const schedule: CronOptions = notifier.schedule || {
         minute: '0',
         hour: '*',
         day: '*',
         month: '*',
         year: '*',
       };
-      const webhookUrlParameterName = notifier['webhookUrlParameterName'];
       const webhookUrlParameterStore = StringParameter.fromSecureStringParameterAttributes(
         this,
         `webhookUrlParameterStore-${notifierName}`,
         {
-          parameterName: webhookUrlParameterName,
+          parameterName: notifier.webhookUrlParameterName,
         }
       );
 
@@ -270,7 +236,6 @@ export class WhatsNewSummaryNotifierStack extends cdk.Stack {
       webhookUrlParameterStore.grantRead(notifyNewEntryRole);
 
       // Scheduled Rule for RSS Crawler
-      // Run every hour, 24 hours a day
       // see https://docs.aws.amazon.com/AmazonCloudWatch/latest/events/ScheduledEvents.html#CronExpressions
       const rule = new Rule(this, `CheckUpdate-${notifierName}`, {
         schedule: Schedule.cron(schedule),
