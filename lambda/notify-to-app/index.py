@@ -9,8 +9,6 @@ import traceback
 
 import urllib.request
 
-from typing import Optional
-from botocore.config import Config
 from bs4 import BeautifulSoup
 from botocore.exceptions import ClientError
 import re
@@ -21,9 +19,30 @@ NOTIFIERS = json.loads(os.environ["NOTIFIERS"])
 SUMMARIZERS = json.loads(os.environ["SUMMARIZERS"])
 DDB_TABLE_NAME = os.environ.get("DDB_TABLE_NAME", "AWSUpdatesRSSHistory")
 
+# 要約対象の記事本文の最大文字数（超過分は切り詰める）
+MAX_BLOG_BODY_CHARS = 50000
+
 ssm = boto3.client("ssm")
 dynamo = boto3.resource("dynamodb")
 table = dynamo.Table(DDB_TABLE_NAME)
+
+# Webhook URLはウォームスタート間で再利用する
+webhook_url_cache = {}
+
+
+def get_webhook_url(parameter_name):
+    """Get a webhook URL from Parameter Store, caching it across warm invocations
+
+    Args:
+        parameter_name (str): The name of the Parameter Store parameter
+
+    Returns:
+        str: The webhook URL
+    """
+    if parameter_name not in webhook_url_cache:
+        response = ssm.get_parameter(Name=parameter_name, WithDecryption=True)
+        webhook_url_cache[parameter_name] = response["Parameter"]["Value"]
+    return webhook_url_cache[parameter_name]
 
 
 def get_blog_content(url):
@@ -36,92 +55,30 @@ def get_blog_content(url):
         str: The content of the blog post, or None if it cannot be retrieved.
     """
 
+    if not url.lower().startswith(("http://", "https://")):
+        print(f"Invalid URL scheme: {url}")
+        return None
+
     try:
-        if url.lower().startswith(("http://", "https://")):
-            # Use the `with` statement to ensure the response is properly closed
-            with urllib.request.urlopen(url) as response:
-                html = response.read()
-                if response.getcode() == 200:
-                    soup = BeautifulSoup(html, "html.parser")
-                    main = soup.find("main")
+        # Use the `with` statement to ensure the response is properly closed
+        with urllib.request.urlopen(url) as response:
+            status_code = response.getcode()
+            if status_code != 200:
+                print(f"Error accessing {url}, status code {status_code}")
+                return None
 
-                    if main:
-                        return main.text
-                    else:
-                        return None
+            soup = BeautifulSoup(response.read(), "html.parser")
+            main = soup.find("main")
 
-        else:
-            print(f"Error accessing {url}, status code {response.getcode()}")
-            return None
+            if main is None:
+                print(f"No <main> element found in {url}")
+                return None
+
+            return main.text
 
     except urllib.error.URLError as e:
         print(f"Error accessing {url}: {e.reason}")
         return None
-
-
-def get_bedrock_client(
-    assumed_role: Optional[str] = None,
-    region: Optional[str] = None,
-    runtime: Optional[bool] = True,
-):
-    """Create a boto3 client for Amazon Bedrock, with optional configuration overrides
-
-    Args:
-        assumed_role (Optional[str]): Optional ARN of an AWS IAM role to assume for calling the Bedrock service. If not
-            specified, the current active credentials will be used.
-        region (Optional[str]): Optional name of the AWS Region in which the service should be called (e.g. "us-east-1").
-            If not specified, AWS_REGION or AWS_DEFAULT_REGION environment variable will be used.
-        runtime (Optional[bool]): Optional choice of getting different client to perform operations with the Amazon Bedrock service.
-    """
-
-    if region is None:
-        target_region = os.environ.get(
-            "AWS_REGION", os.environ.get("AWS_DEFAULT_REGION")
-        )
-    else:
-        target_region = region
-
-    print(f"Create new client\n  Using region: {target_region}")
-    session_kwargs = {"region_name": target_region}
-    client_kwargs = {**session_kwargs}
-
-    profile_name = os.environ.get("AWS_PROFILE")
-    if profile_name:
-        print(f"  Using profile: {profile_name}")
-        session_kwargs["profile_name"] = profile_name
-
-    retry_config = Config(
-        region_name=target_region,
-        retries={
-            "max_attempts": 10,
-            "mode": "standard",
-        },
-    )
-    session = boto3.Session(**session_kwargs)
-
-    if assumed_role:
-        print(f"  Using role: {assumed_role}", end="")
-        sts = session.client("sts")
-        response = sts.assume_role(
-            RoleArn=str(assumed_role), RoleSessionName="langchain-llm-1"
-        )
-        print(" ... successful!")
-        client_kwargs["aws_access_key_id"] = response["Credentials"]["AccessKeyId"]
-        client_kwargs["aws_secret_access_key"] = response["Credentials"][
-            "SecretAccessKey"
-        ]
-        client_kwargs["aws_session_token"] = response["Credentials"]["SessionToken"]
-
-    if runtime:
-        service_name = "bedrock-runtime"
-    else:
-        service_name = "bedrock"
-
-    bedrock_client = session.client(
-        service_name=service_name, config=retry_config, **client_kwargs
-    )
-
-    return bedrock_client
 
 
 def summarize_blog(
@@ -136,40 +93,47 @@ def summarize_blog(
         persona (str): The persona to use for the summary
 
     Returns:
-        str: The summarized text
+        tuple: (summary, detail), or (None, None) if summarization fails
     """
 
     boto3_bedrock = boto3.client("bedrock-runtime", region_name=MODEL_REGION)
 
-    beginning_word = "<output>"
+    if len(blog_body) > MAX_BLOG_BODY_CHARS:
+        print(f"Input is too long. Truncating to {MAX_BLOG_BODY_CHARS} characters")
+        blog_body = blog_body[:MAX_BLOG_BODY_CHARS]
 
-    persona_data = f"""
-    <persona> {persona} </persona>
-    """
-    system = [{"text": persona_data}]
+    system_text = (
+        f"You are a {persona}. "
+        "You read AWS update announcements and blog posts, and explain them accurately and clearly "
+        "to engineers who are not yet familiar with the topic. "
+        f"Write all output in {language}"
+    )
+    system = [{"text": system_text}]
 
-    prompt_data = f"""
-    <input>{blog_body}</input>
-    <instruction>Describe a new update in <input></input> tags in detailed sentences to describe "What is described", "Who is this update good for" in a way that a new engineer can follow. 
-    Description shall be output in <details></details> tags as clear and detailed explanations rather than bullet points. 
-    Make final summary as per <summaryRule></summaryRule> tags. 
-    Try to shorten output for easy reading. 
-    You are not allowed to utilize any information except in the input. 
-    Output format shall be in accordance with <outputFormat></outputFormat> tags.</instruction>
-    <outputLanguage> {language} </outputLanguage>
-    <summaryRule>The final summary must consist of at least three sentences, including specific use cases in which it is useful.
-    Output format is defined in <outputFormat></outputFormat> tags.</summaryRule>
-    <outputFormat><details>(detailed explanation of the input)</details><summary>(final summary)</summary></outputFormat>
-    Follow the instruction.
-    """
+    prompt_data = f"""Read the article inside <input></input> tags, then write a detailed explanation and a summary of it.
+
+<input>{blog_body}</input>
+
+Follow these rules:
+- Use only information contained in the article. Do not add outside knowledge or speculation.
+- In the detailed explanation, describe "what is announced" and "who benefits from this update" in clear, flowing sentences (not bullet points) that an engineer new to the topic can follow.
+- The summary must consist of at least three sentences and include specific use cases in which the update is useful.
+- Keep the whole output concise and easy to read.
+- Output exactly in the following format, with no text before or after it:
+
+<details>(detailed explanation of the article)</details>
+<summary>(summary)</summary>
+
+Here is an example that shows the expected style and level of detail. Write your actual output about the article above, in the language specified for you:
+
+<details>AWS announced that Amazon Example Service now supports feature X in all commercial regions. Previously, users had to configure Y manually for each workload, but with this update the service handles Y automatically, which reduces operational work and the risk of misconfiguration. This update mainly benefits teams that operate Z at scale, because they no longer need to build and maintain custom scripts for Y.</details>
+<summary>Amazon Example Service now supports feature X, which automates Y without manual configuration. This is useful for teams operating Z at scale, as it removes the need for custom scripts. For example, a team running large batch workloads can now let the service handle Y automatically and focus on their application logic.</summary>"""
 
     messages = [{"role": "user", "content": [{"text": prompt_data}]}]
 
-    inf_params = {"maxTokens": 4096, "topP": 0.1, "temperature": 0.5}
+    inf_params = {"maxTokens": 4096, "topP": 0.9, "temperature": 0.3}
 
     additionalModelRequestFields = {"inferenceConfig": {"topK": 20}}
-
-    outputText = "\n"
 
     try:
         response = boto3_bedrock.converse(
@@ -179,14 +143,15 @@ def summarize_blog(
             inferenceConfig=inf_params,
             additionalModelRequestFields=additionalModelRequestFields,
         )
-        # response_body = json.loads(response.get("body").read().decode())
-        outputText = (
-            beginning_word + response["output"]["message"]["content"][0]["text"]
-        )
+        outputText = response["output"]["message"]["content"][0]["text"]
         print(outputText)
-        # extract contant inside <summary> tag
+        # extract content inside <summary> and <details> tags
         summary = re.findall(r"<summary>([\s\S]*?)</summary>", outputText)[0]
         detail = re.findall(r"<details>([\s\S]*?)</details>", outputText)[0]
+        return summary, detail
+    except IndexError:
+        print("Failed to extract <summary> or <details> tags from the model output")
+        return None, None
     except ClientError as error:
         if error.response["Error"]["Code"] == "AccessDeniedException":
             print(
@@ -194,10 +159,8 @@ def summarize_blog(
             \nTo troubeshoot this issue please refer to the following resources.\ \nhttps://docs.aws.amazon.com/IAM/latest/UserGuide/troubleshoot_access-denied.html\
             \nhttps://docs.aws.amazon.com/bedrock/latest/userguide/security-iam.html\x1b[0m\n"
             )
-        else:
-            raise error
-
-    return summary, detail
+            return None, None
+        raise error
 
 
 def push_notification(item_list):
@@ -209,17 +172,15 @@ def push_notification(item_list):
 
     for item in item_list:
         notifier = NOTIFIERS[item["rss_notifier_name"]]
-        webhook_url_parameter_name = notifier["webhookUrlParameterName"]
         destination = notifier["destination"]
-        ssm_response = ssm.get_parameter(
-            Name=webhook_url_parameter_name, WithDecryption=True
-        )
-        app_webhook_url = ssm_response["Parameter"]["Value"]
-        # blog_genre = list(notifier["rssUrl"].keys())[0]
+        app_webhook_url = get_webhook_url(notifier["webhookUrlParameterName"])
         item_url = item["rss_link"]
 
         # Get the blog context
         content = get_blog_content(item_url)
+        if content is None:
+            print(f"Skip summarization because content is unavailable: {item_url}")
+            continue
 
         # Summarize the blog
         summarizer = SUMMARIZERS[notifier["summarizerName"]]
@@ -228,6 +189,9 @@ def push_notification(item_list):
             language=summarizer["outputLanguage"],
             persona=summarizer["persona"],
         )
+        if summary is None or detail is None:
+            print(f"Skip notification because summarization failed: {item_url}")
+            continue
 
         # Add the summary text to notified message
         item["summary"] = summary
@@ -255,7 +219,6 @@ def push_notification(item_list):
             print(f"Skipping notification for category: {item.get('rss_category')}")
             continue
 
-        # item["blog_genre"] = blog_genre
         if destination == "teams":
             item["detail"] = item["detail"].replace("。\n", "。\r")
             msg = create_teams_message(item)
@@ -423,5 +386,5 @@ def handler(event, context):
         new_data = get_new_entries(event["Records"])
         if 0 < len(new_data):
             push_notification(new_data)
-    except Exception as e:
-        print(traceback.print_exc())
+    except Exception:
+        traceback.print_exc()

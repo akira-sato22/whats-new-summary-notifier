@@ -24,7 +24,7 @@ This stack create following architecture.
 
 ## Deployment Steps
 > [!IMPORTANT]
-> This repository is set up to use the Anthropic Claude 3 Sonnet model in the US East (N. Virginia) region (us-east-1) by default. Please open the [Model access screen (us-east-1)](https://us-east-1.console.aws.amazon.com/bedrock/home?region=us-east-1#/modelaccess), check the Anthropic Claude 3 Sonnet option, and click Save changes.
+> This repository is set up to use the Amazon Nova Pro model (`us.amazon.nova-pro-v1:0`) in the US East (N. Virginia) region (us-east-1) by default. Please open the [Model access screen (us-east-1)](https://us-east-1.console.aws.amazon.com/bedrock/home?region=us-east-1#/modelaccess), check the Amazon Nova Pro option, and click Save changes. To use a different model, change `modelId` in `cdk.json`.
 
 ### Create Webhook URL 
 Create the Webhook URL required for the notifications.
@@ -39,7 +39,7 @@ Refer to [this documentation](https://slack.com/help/articles/17542172840595-Bui
 * `rss_link`: The URL of the article
 * `rss_title`: The title of the article
 * `summary`: A summary of the article
-* `detail`: A bulleted description of the article
+* `detail`: A detailed description of the article
 
 ### Create AWS Systems Manager Parameter Store 
 
@@ -54,8 +54,11 @@ aws ssm put-parameter \
   --value "<Input your Webhook URL >"
 ```
 
+### Setting Up the Weekly Summary Feature (Optional)
+Every Monday at 8:00 (UTC), the articles from the last 7 days are compiled into Markdown files, saved to Amazon S3, and posted to Slack. Posting to Slack requires registering a Slack Bot token and channel ID beforehand. See [Setting Up the Weekly Summary Feature](DEPLOY.md#setting-up-the-weekly-summary-feature) in the deployment guide for the steps (real-time article notifications and saving to S3 still work without this setup).
+
 ### Changing the Language Setting (Optional)
-This asset is set up to output summaries in Japanese (日本語) by default. If you want to generate output in other languages such as English, open the `cdk.json` file and change the `summarizerName` value inside the `notifiers` object within the `context` section from `AwsSolutionsArchitectJapanese` to `AwsSolutionsArchitectEnglish` or another language. For more information on other configuration options, please refer to the [Deployment Guide](DEPLOY.md). For more information on other configuration options, please refer to the [Deployment Guide](DEPLOY.md).
+This asset is set up to output summaries in Japanese (日本語) by default. If you want to generate output in other languages such as English, open the `cdk.json` file and change the `summarizerName` value inside the `notifiers` object within the `context` section from `AwsSolutionsArchitectJapanese` to `AwsSolutionsArchitectEnglish` or another language. For more information on other configuration options, please refer to the [Deployment Guide](DEPLOY.md).
 
 ### Execute the deployment
 **Initialize**
@@ -75,6 +78,18 @@ cdk synth
 
 ```
 cdk deploy
+```
+
+## Testing
+Tests for the CDK stack and unit tests for the Lambda functions are available.
+
+```bash
+# CDK stack tests
+npm test
+
+# Python unit tests (install the dependencies from each lambda/*/requirements.txt first)
+pip install -r lambda/notify-to-app/requirements.txt -r lambda/rss-crawler/requirements.txt -r lambda/markdown-generator/requirements.txt
+npm run test:py
 ```
 
 ## Delete Stack

@@ -5,7 +5,7 @@
 
 ## 共通設定
 * `modelRegion`: Amazon Bedrock を利用するリージョン。Amazon Bedrock を利用可能なリージョンの中から、利用したいリージョンのリージョンコードを入力してください。
-* `modelId`: Amazon Bedrock で利用する基盤モデルの model ID。Anthropic Claude 3 およびそれ以前のバージョンに対応をしています。各モデルの model ID はドキュメントを参照ください。
+* `modelId`: Amazon Bedrock で利用する基盤モデルの model ID。Converse API に対応したテキスト生成モデルを指定できます (デフォルトは Amazon Nova Pro)。各モデルの model ID は [Amazon Bedrock のドキュメント](https://docs.aws.amazon.com/bedrock/latest/userguide/models-supported.html)を参照ください。
 
 ## summarizers
 生成 AI に入力する要約用プロンプトの設定を行います。
@@ -20,7 +20,7 @@
 * `summarizerName`: 配信に使用する summarizer の名前。
 * `webhookUrlParameterName`: Webhook URL を格納している AWS Systems Manager Parameter Store のパラメータ名。
 * `rssUrl`: 最新情報を取得したい Web サイトの RSS フィード URL。URL は複数指定する事が可能です。
-* `schedule` (オプション): CRON 形式の RSS フィード取得間隔。本パラメータの指定がない場合は、毎時 00 分にフィードを取得します。下記の例の場合は、15 分に一度フィード取得が行われます。
+* `schedule` (オプション): CRON 形式の RSS フィード取得間隔。本パラメータの指定がない場合は、30 分に一度 (毎時 00 分と 30 分) フィードを取得します。下記の例の場合は、15 分に一度フィード取得が行われます。
 
 ```json
 ...
@@ -32,6 +32,37 @@
   "year": "*"
 }
 ```
+
+# 週間サマリー機能のセットアップ
+
+過去 7 日分の記事をグループ別 (What's New / AWS Blog) の Markdown ファイルにまとめ、Amazon S3 への保存と Slack へのファイル投稿を行う機能です。毎週月曜 8:00 (UTC) に自動実行されます。
+
+Slack への投稿には記事通知用の Webhook とは別に Slack Bot (Slack API) を使用するため、以下の事前準備が必要です。
+
+## Slack アプリの準備
+
+1. [Slack API](https://api.slack.com/apps) で新しいアプリを作成します。
+2. 「OAuth & Permissions」の Bot Token Scopes に `files:write` と `chat:write` を追加します。
+3. アプリをワークスペースにインストールし、Bot User OAuth Token (`xoxb-` で始まる文字列) を控えます。
+4. 投稿先チャンネルに Bot を招待し (`/invite @<アプリ名>`)、チャンネル ID (`C` で始まる文字列) を控えます。
+
+## パラメータストア登録 (AWS CLI)
+
+```bash
+aws ssm put-parameter \
+  --name "/WhatsNew/SLACK_BOT_TOKEN" \
+  --type "SecureString" \
+  --value "<Bot User OAuth Token を入力>"
+
+aws ssm put-parameter \
+  --name "/WhatsNew/SLACK_CHANNEL_ID" \
+  --type "SecureString" \
+  --value "<チャンネル ID を入力>"
+```
+
+> [!NOTE]
+> 上記パラメータが未作成でもデプロイ自体は成功しますが、週間サマリー実行時の Slack への投稿が失敗します (S3 への保存は行われます)。
+> 生成された Markdown ファイルは `aws-whats-new-weekly-summary-<アカウントID>-<リージョン>` バケットの `weekly-summaries/` 配下に保存されます。
 
 # 操作環境の準備 (AWS Cloud9)
 本手順では、AWS 上に必要なツールがインストールされた開発環境を作成します。環境構築には、AWS Cloud9 を使用します。

@@ -4,7 +4,6 @@ import os
 import datetime
 from datetime import timedelta
 import traceback
-from urllib.parse import urlparse
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 
@@ -12,7 +11,25 @@ from slack_sdk.errors import SlackApiError
 DDB_TABLE_NAME = os.environ.get("DDB_TABLE_NAME", "AWSUpdatesRSSHistory")
 S3_BUCKET_NAME = os.environ.get("S3_BUCKET_NAME")
 SLACK_BOT_TOKEN_PARAMETER = os.environ.get("SLACK_BOT_TOKEN_PARAMETER")
-SLACK_CHANNEL_ID_PARAMETER = os.environ.get("SLACK_CHANNEL_ID")
+SLACK_CHANNEL_ID_PARAMETER = os.environ.get("SLACK_CHANNEL_ID_PARAMETER")
+
+# カテゴリグループの定義
+CATEGORY_GROUPS = {
+    "whats-new": {
+        "display_name": "What's New",
+        "description": "過去{days}日間のAWS What's New情報の週間サマリーです。",
+        "emoji": "🎉",
+        "file_suffix": "whats-new",
+        "categories": ["Whats new"],  # 完全一致。空の場合はその他すべて
+    },
+    "others": {
+        "display_name": "AWS Blog",
+        "description": "過去{days}日間のAWS Blog情報の週間サマリーです。",
+        "emoji": "📰",
+        "file_suffix": "aws-blog",
+        "categories": [],
+    },
+}
 
 # AWS クライアント
 dynamo = boto3.resource("dynamodb")
@@ -39,26 +56,6 @@ def get_parameter_value(parameter_name):
         return None
 
 
-def get_slack_token():
-    """
-    Parameter StoreからSlackトークンを取得する
-
-    Returns:
-        str: Slackトークン
-    """
-    return get_parameter_value(SLACK_BOT_TOKEN_PARAMETER)
-
-
-def get_slack_channel_id():
-    """
-    Parameter StoreからSlackチャンネルIDを取得する
-
-    Returns:
-        str: SlackチャンネルID
-    """
-    return get_parameter_value(SLACK_CHANNEL_ID_PARAMETER)
-
-
 def get_news_from_last_n_days(days=7):
     """
     過去N日間のニュースをDynamoDBから取得する
@@ -83,11 +80,12 @@ def get_news_from_last_n_days(days=7):
             response = table.scan(ExclusiveStartKey=response["LastEvaluatedKey"])
             items.extend(response["Items"])
 
-        # 日付でフィルタリング（カテゴリフィルタを削除）
-        filtered_items = []
-        for item in items:
-            if "pubtime" in item and item["pubtime"] >= start_date:
-                filtered_items.append(item)
+        # 日付でフィルタリング
+        filtered_items = [
+            item
+            for item in items
+            if "pubtime" in item and item["pubtime"] >= start_date
+        ]
 
         # 日付順にソート
         filtered_items.sort(key=lambda x: x["pubtime"], reverse=False)
@@ -102,7 +100,7 @@ def get_news_from_last_n_days(days=7):
 
 def group_news_by_category_type(news_items):
     """
-    ニュースを"What's new"と"その他"の2つのグループに分類する
+    ニュースを"whats-new"と"others"の2つのグループに分類する
 
     Args:
         news_items (list): ニュースのリスト
@@ -110,19 +108,7 @@ def group_news_by_category_type(news_items):
     Returns:
         dict: グループごとに分類されたニュース
     """
-    # カテゴリグループの定義
-    CATEGORY_GROUPS = {
-        "whats-new": {
-            "display_name": "What's New",
-            "categories": ["Whats new"],  # 完全一致
-        },
-        "others": {
-            "display_name": "AWS Blogs",
-            "categories": [],  # 空の場合は"What's new"以外すべて
-        },
-    }
-
-    groups = {"whats-new": [], "others": []}
+    groups = {group_name: [] for group_name in CATEGORY_GROUPS}
 
     for item in news_items:
         category = item.get("category", "その他")
@@ -176,18 +162,6 @@ def generate_markdown(news_items, group_name, days=7):
         f"{start_date.strftime('%Y-%m-%d')} から {end_date.strftime('%Y-%m-%d')}"
     )
 
-    # グループの表示名を取得
-    CATEGORY_GROUPS = {
-        "whats-new": {
-            "display_name": "What's New",
-            "description": "過去{days}日間のAWS What's New情報の週間サマリーです。",
-        },
-        "others": {
-            "display_name": "AWS Blog",
-            "description": "過去{days}日間のAWS Blog情報の週間サマリーです。",
-        },
-    }
-
     group_info = CATEGORY_GROUPS[group_name]
 
     # Markdownのヘッダー
@@ -211,8 +185,10 @@ def generate_markdown(news_items, group_name, days=7):
 
             # 日付を整形
             try:
-                pub_date = datetime.datetime.fromisoformat(pubtime).strftime("%Y-%m-%d")
-            except:
+                pub_date = datetime.datetime.fromisoformat(pubtime).strftime(
+                    "%Y-%m-%d"
+                )
+            except (ValueError, TypeError):
                 pub_date = pubtime
 
             markdown += f"### [{title}]({url})\n"
@@ -255,25 +231,25 @@ def save_to_s3(markdown_content, group_name, filename):
         return False
 
 
-def push_to_slack(markdown_content, s3_location, news_count, group_name):
+def push_to_slack(markdown_content, news_count, group_name, s3_location=None):
     """
     Slackにメッセージとファイルを送信する（グループ別）
 
     Args:
         markdown_content (str): Markdownの内容
-        s3_location (str): S3のURL
         news_count (int): ニュース数
         group_name (str): グループ名（"whats-new" または "others"）
+        s3_location (str): S3の保存先URI（省略可）
     """
     try:
         # SlackチャンネルIDを取得
-        channel_id = get_slack_channel_id()
+        channel_id = get_parameter_value(SLACK_CHANNEL_ID_PARAMETER)
         if not channel_id:
             print("SLACK_CHANNEL_IDの取得に失敗しました")
             return False
 
         # Slackトークンを取得
-        slack_token = get_slack_token()
+        slack_token = get_parameter_value(SLACK_BOT_TOKEN_PARAMETER)
         if not slack_token:
             print("SLACK_BOT_TOKENの取得に失敗しました")
             return False
@@ -284,25 +260,13 @@ def push_to_slack(markdown_content, s3_location, news_count, group_name):
         # 現在の日付を取得してファイル名を生成
         now = datetime.datetime.now()
 
-        # グループ別のファイル名を生成
-        CATEGORY_GROUPS = {
-            "whats-new": {
-                "display_name": "What's New",
-                "emoji": "🎉",
-                "file_suffix": "whats-new",
-            },
-            "others": {
-                "display_name": "AWS Blog",
-                "emoji": "📰",
-                "file_suffix": "aws-blog",
-            },
-        }
-
         group_info = CATEGORY_GROUPS[group_name]
         file_name = f"{now.strftime('%Y%m%d')}-{group_info['file_suffix']}-updates.md"
 
         # 初期メッセージを作成
         initial_message = f"AWS 週間アップデート情報 - {group_info['display_name']} {group_info['emoji']}\n更新件数: {news_count}件"
+        if s3_location:
+            initial_message += f"\n保存先: `{s3_location}`"
 
         # ファイルをアップロード
         try:
@@ -371,8 +335,7 @@ def handler(event, context):
             print(f"{group_name}グループの処理を開始: {len(group_items)}件")
 
             # グループ別のファイル名を生成
-            CATEGORY_GROUPS = {"whats-new": "whats-new", "others": "aws-blog"}
-            group_suffix = CATEGORY_GROUPS[group_name]
+            group_suffix = CATEGORY_GROUPS[group_name]["file_suffix"]
             filename = f"{now.strftime('%Y/%m/%d')}/{now.strftime('%Y%m%d')}-{group_suffix}-updates.md"
 
             # Markdownを生成
@@ -390,9 +353,9 @@ def handler(event, context):
                     # Slackに通知を送信
                     slack_success = push_to_slack(
                         markdown_content=markdown_content,
-                        s3_location=s3_url,
                         news_count=len(group_items),
                         group_name=group_name,
+                        s3_location=s3_url,
                     )
                     group_response["slack_notification"] = (
                         "success" if slack_success else "failed"

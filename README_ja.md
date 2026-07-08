@@ -20,7 +20,7 @@
 
 ## デプロイ手順
 > [!IMPORTANT]
-> このリポジトリでは、デフォルトで米国東部 (バージニア北部) リージョン (us-east-1) の Anthropic Claude 3 Sonnet モデルを利用する設定になっています。[Model access 画面 (us-east-1)](https://us-east-1.console.aws.amazon.com/bedrock/home?region=us-east-1#/modelaccess)を開き、Anthropic Claude 3 Sonnet にチェックして Save changes してください。
+> このリポジトリでは、デフォルトで米国東部 (バージニア北部) リージョン (us-east-1) の Amazon Nova Pro モデル (`us.amazon.nova-pro-v1:0`) を利用する設定になっています。[Model access 画面 (us-east-1)](https://us-east-1.console.aws.amazon.com/bedrock/home?region=us-east-1#/modelaccess)を開き、Amazon Nova Pro にチェックして Save changes してください。別のモデルを利用する場合は `cdk.json` の `modelId` を変更してください。
 
 ### Webhook URL の取得
 通知に必要となる Webhook URL の払い出しを行います。
@@ -36,7 +36,7 @@
 * `rss_link`: 記事の URL
 * `rss_title`: 記事のタイトル
 * `summary`: 記事の要約
-* `detail`: 記事の箇条書き説明
+* `detail`: 記事の詳細説明
 
 ### AWS Systems Manager Parameter Store を作成
 
@@ -50,6 +50,9 @@ aws ssm put-parameter \
   --type "SecureString" \
   --value "<Webhook URL を入力>"
 ```
+
+### 週間サマリー機能のセットアップ (オプション)
+過去 7 日分の記事を Markdown ファイルにまとめて Amazon S3 に保存し、Slack に投稿する機能が毎週月曜 8:00 (UTC) に実行されます。Slack への投稿には Slack Bot トークンとチャンネル ID の事前登録が必要です。手順は[デプロイガイドの週間サマリー機能のセットアップ](DEPLOY_ja.md#週間サマリー機能のセットアップ)を参照してください (未設定の場合も記事のリアルタイム通知と S3 への保存は動作します)。
 
 ### 言語設定の変更 (オプション)
 このアセットはデフォルトで日本語の要約を出力するように設定されています。英語等の他言語の出力を行う場合は、`cdk.json` を開き、`context` 内の `notifiers` 内の `summarizerName` を `AwsSolutionsArchitectJapanese` から `AwsSolutionsArchitectEnglish` などに書き換えてください。その他の設定オプションについては[デプロイガイド](DEPLOY_ja.md)を参照してください。
@@ -72,6 +75,18 @@ cdk synth
 
 ```
 cdk deploy
+```
+
+## テスト
+CDK スタックのテストと Lambda 関数のユニットテストを用意しています。
+
+```bash
+# CDK スタックのテスト
+npm test
+
+# Python ユニットテスト (事前に各 lambda/*/requirements.txt の依存をインストールしてください)
+pip install -r lambda/notify-to-app/requirements.txt -r lambda/rss-crawler/requirements.txt -r lambda/markdown-generator/requirements.txt
+npm run test:py
 ```
 
 ## スタックの削除
