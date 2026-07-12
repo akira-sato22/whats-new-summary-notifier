@@ -162,7 +162,8 @@ def summarize_blog(
     2: Small improvement or minor feature addition to an existing service
     3: Moderate feature addition that is useful for a meaningful number of users
     4: Major feature addition or significant enhancement to an existing service
-    5: New service launch or groundbreaking major feature announcement</ratingRule>"""
+    5: New service launch or groundbreaking major feature announcement
+    Exception: if the update is about availability in a Japanese region (Asia Pacific (Tokyo) / ap-northeast-1, or Asia Pacific (Osaka) / ap-northeast-3), always rate it 5 regardless of the rules above.</ratingRule>"""
         rating_format = "<rating>(importance rating from 1 to 5)</rating>"
 
     prompt_data = f"""
