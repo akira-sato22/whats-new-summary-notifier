@@ -128,15 +128,18 @@ def summarize_blog(
     blog_body,
     language,
     persona,
+    include_rating=False,
 ):
     """Summarize the content of a blog post
     Args:
         blog_body (str): The content of the blog post to be summarized
         language (str): The language for the summary
         persona (str): The persona to use for the summary
+        include_rating (bool): Whether to rate the importance of the update on a 1-5 scale
 
     Returns:
-        str: The summarized text
+        tuple: The summarized text, the detailed explanation, and the importance rating
+            (int 1-5, or None when include_rating is False or the rating could not be parsed)
     """
 
     boto3_bedrock = boto3.client("bedrock-runtime", region_name=MODEL_REGION)
@@ -148,18 +151,33 @@ def summarize_blog(
     """
     system = [{"text": persona_data}]
 
+    rating_instruction = ""
+    rating_rule = ""
+    rating_format = ""
+    if include_rating:
+        rating_instruction = "Rate the importance of the update as per <ratingRule></ratingRule> tags. "
+        rating_rule = """
+    <ratingRule>Rate the importance of the update on a scale of 1 to 5 and output only the number in <rating></rating> tags.
+    1: Minor update (e.g. availability in additional regions, minor version support, small limit increases)
+    2: Small improvement or minor feature addition to an existing service
+    3: Moderate feature addition that is useful for a meaningful number of users
+    4: Major feature addition or significant enhancement to an existing service
+    5: New service launch or groundbreaking major feature announcement
+    Exception: if the update is about availability in a Japanese region (Asia Pacific (Tokyo) / ap-northeast-1, or Asia Pacific (Osaka) / ap-northeast-3), always rate it 5 regardless of the rules above.</ratingRule>"""
+        rating_format = "<rating>(importance rating from 1 to 5)</rating>"
+
     prompt_data = f"""
     <input>{blog_body}</input>
-    <instruction>Describe a new update in <input></input> tags in detailed sentences to describe "What is described", "Who is this update good for" in a way that a new engineer can follow. 
-    Description shall be output in <details></details> tags as clear and detailed explanations rather than bullet points. 
-    Make final summary as per <summaryRule></summaryRule> tags. 
-    Try to shorten output for easy reading. 
-    You are not allowed to utilize any information except in the input. 
+    <instruction>Describe a new update in <input></input> tags in detailed sentences to describe "What is described", "Who is this update good for" in a way that a new engineer can follow.
+    Description shall be output in <details></details> tags as clear and detailed explanations rather than bullet points.
+    Make final summary as per <summaryRule></summaryRule> tags.
+    {rating_instruction}Try to shorten output for easy reading.
+    You are not allowed to utilize any information except in the input.
     Output format shall be in accordance with <outputFormat></outputFormat> tags.</instruction>
     <outputLanguage> {language} </outputLanguage>
     <summaryRule>The final summary must consist of at least three sentences, including specific use cases in which it is useful.
-    Output format is defined in <outputFormat></outputFormat> tags.</summaryRule>
-    <outputFormat><details>(detailed explanation of the input)</details><summary>(final summary)</summary></outputFormat>
+    Output format is defined in <outputFormat></outputFormat> tags.</summaryRule>{rating_rule}
+    <outputFormat><details>(detailed explanation of the input)</details><summary>(final summary)</summary>{rating_format}</outputFormat>
     Follow the instruction.
     """
 
@@ -187,6 +205,13 @@ def summarize_blog(
         # extract contant inside <summary> tag
         summary = re.findall(r"<summary>([\s\S]*?)</summary>", outputText)[0]
         detail = re.findall(r"<details>([\s\S]*?)</details>", outputText)[0]
+        rating = None
+        if include_rating:
+            rating_match = re.findall(r"<rating>\s*([1-5])\s*</rating>", outputText)
+            if rating_match:
+                rating = int(rating_match[0])
+            else:
+                print("Rating could not be extracted from the model output")
     except ClientError as error:
         if error.response["Error"]["Code"] == "AccessDeniedException":
             print(
@@ -197,7 +222,7 @@ def summarize_blog(
         else:
             raise error
 
-    return summary, detail
+    return summary, detail, rating
 
 
 def push_notification(item_list):
@@ -221,22 +246,34 @@ def push_notification(item_list):
         # Get the blog context
         content = get_blog_content(item_url)
 
+        # AWS What's New の記事のみ重要度評価(★1〜5)を付与
+        is_whats_new = item.get("rss_category") == "Whats new"
+
         # Summarize the blog
         summarizer = SUMMARIZERS[notifier["summarizerName"]]
-        summary, detail = summarize_blog(
+        summary, detail, rating = summarize_blog(
             content,
             language=summarizer["outputLanguage"],
             persona=summarizer["persona"],
+            include_rating=is_whats_new,
         )
 
         # Add the summary text to notified message
         item["summary"] = summary
         item["detail"] = detail
+        if rating:
+            stars = "★" * rating
+            item["rating"] = rating
+            # 通知メッセージのサマリ冒頭に重要度を表示
+            item["summary"] = f"重要度: {stars}\n{summary}"
 
         # Update DynamoDB with the summary and detail
         try:
             update_expression = "SET summary = :summary, detail = :detail"
             expression_values = {":summary": summary, ":detail": detail}
+            if rating:
+                update_expression += ", rating = :rating"
+                expression_values[":rating"] = rating
 
             table.update_item(
                 Key={
