@@ -208,6 +208,7 @@ def generate_markdown(news_items, group_name, days=7):
             url = item.get("url", "")
             pubtime = item.get("pubtime", "")
             detail = item.get("detail", "")
+            rating = item.get("rating")
 
             # 日付を整形
             try:
@@ -217,6 +218,11 @@ def generate_markdown(news_items, group_name, days=7):
 
             markdown += f"### [{title}]({url})\n"
             markdown += f"**公開日:** {pub_date}\n\n"
+
+            # 重要度評価が存在する場合は追加（What's New記事のみ付与される）
+            if rating:
+                stars = "★" * int(rating)
+                markdown += f"**重要度:** {stars}\n\n"
 
             # 詳細情報が存在する場合は追加
             if detail:
